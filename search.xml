@@ -1,6 +1,101 @@
 <?xml version="1.0" encoding="utf-8"?>
 <search>
   <entry>
+    <title>Android Native内存泄漏管理（2）：Android内存分配与OOM解决方案</title>
+    <url>/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/</url>
+    <content><![CDATA[<h2 id="基本概念"><a href="#基本概念" class="headerlink" title="基本概念"></a>基本概念</h2><h3 id="OOM"><a href="#OOM" class="headerlink" title="OOM"></a>OOM</h3><p>OutOfMemory，Android平台上主要有三类：Java OOM，虚拟内存OOM，物理内存OOM，Java OOM指Java堆内存耗尽。</p>
+<p>物理内存即RAM，虚拟内存主要是为了满足操作系统和应用程序对物理内存的需求。虚拟内存有几个重要特点，第一个是<strong>按需分配</strong>，当分配虚拟内存时，内核先分配一个空闲地址区间，当cpu访问这个地址时，才分配实际物理页（真正使用的内存远小于实际分配的内存）。当cpu访问一个地址时，若发现当前地址未分配物理页，会触发<code>page fault</code>异常，在page fault异常处理中会给当前地址分配物理页，同时加载对应数据。第二个特点是<strong>按页分配</strong>，内核会以每次<code>4kb</code>为单位分配物理内存（内存页），为了减少内存分配的浪费。第三个特点是页表转换，在内存的申请/释放过程后，物理内存中会存在内存碎片，页表转换可以将不连续的物理内存映射到连续的虚拟内存地址。</p>
+<p>虚拟内存不涉及实际物理内存分配，所以理论上虚拟内存应该是无限的，但是地址空间又受限于cpu的寻址能力，32位cpu寻址范围最大4G，所以32位设备虚拟内存上限也是4GB左右。虚拟内存不足会引发<strong>App OOM</strong>，进而引发App崩溃。而物理内存是内核管理的，当物理内存无法满足内存申请时，内核会进行内存回收动作，具体有释放缓存、压缩内存、后台杀进程等。内核在回收内存时会持有内存的大锁，所以如page fault等操作会卡住，导致整个用户空间的执行会非常缓慢，具体表现就是<strong>app卡顿/anr/闪退</strong>，但一般不会导致OOM，因为应用程序的内存需求是按页分配的，这算是一种最低的要求，内存总能满足，如果内存连一个物理页也提供不了，就表明系统其它重要的流程也无法执行了，就会触发<strong>内核的OOM</strong>，具体的表现就是手机的重启。</p>
+<p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/VSS.png" alt="VSS"></p>
+<h3 id="内存表示"><a href="#内存表示" class="headerlink" title="内存表示"></a>内存表示</h3><div class="table-container">
+<table>
+<thead>
+<tr>
+<th>VSS</th>
+<th>虚拟内存大小</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RSS</td>
+<td>实际使用（独占+共享）物理内存大小</td>
+</tr>
+<tr>
+<td>PSS</td>
+<td>Σ(独占物理页) + Σ(共享物理页/共享进程数)</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>PSS越高 越容易在内核回收时被选中杀掉</strong></p>
+<h3 id="内存的申请"><a href="#内存的申请" class="headerlink" title="内存的申请"></a>内存的申请</h3><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span>* <span class="title">mmap</span><span class="params">(<span class="keyword">void</span>* start, <span class="comment">//起始地址，可以是空，也可以指定地址</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">size_t</span> length, <span class="comment">//内存长度</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">int</span> prot, <span class="comment">//访问属性 可读（r）可写（w）可执行（x）</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">int</span> falgs, <span class="comment">//MAP_ANONYMOUS/MAP_FIXED/MAP_PRIVATE/MAP_SHARED</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">int</span> fd, <span class="comment">//被映射文件的句柄，flags设置MAP_ANONYMOUS时忽略</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">off_t</span> offset)</span></span>; <span class="comment">//被映射文件的偏移，必须是page size整数倍</span></span><br></pre></td></tr></table></figure>
+<ul>
+<li>文件映射<ul>
+<li>flags未设置MAP_ANONYMOUS</li>
+<li>fd指向一个已经打开的文件<ul>
+<li>设备文件：dev</li>
+<li>普通文件：system/data/vendor/sdcard</li>
+</ul>
+</li>
+<li>内存段名是文件路径<ul>
+<li>设备文件可以通过ioctl(ctl: control)修改内存段名</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>匿名映射<ul>
+<li>flags设置MAP_ANONYMOUS</li>
+<li>fd一般为-1</li>
+<li>内存段名默认为空<ul>
+<li>可通过prctl设置成<code>anon:xxx</code>(Android10以后webview就是这样)</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>其他映射函数：mremap/munmap/mprotect/ioctl/prctl</li>
+</ul>
+<h2 id="内存分类分布与对应优化"><a href="#内存分类分布与对应优化" class="headerlink" title="内存分类分布与对应优化"></a>内存分类分布与对应优化</h2><h3 id="内存分类与分布"><a href="#内存分类与分布" class="headerlink" title="内存分类与分布"></a>内存分类与分布</h3><p>案例分析：32位设备运行32位app，总虚拟内存3G左右，从zygote到OOM这个过程中各阶段虚拟内存增量情况</p>
+<p>注：</p>
+<ul>
+<li>zygoat：所有应用进程的父进程，app进程都由这个进程孵化而来）</li>
+<li>dalvik：dalvik虚拟机所占据内存</li>
+</ul>
+<p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/lifecycle.png" alt="lifecycle"></p>
+<h3 id="具体内存段的对应优化方案"><a href="#具体内存段的对应优化方案" class="headerlink" title="具体内存段的对应优化方案"></a>具体内存段的对应优化方案</h3><h4 id="虚拟机内存段"><a href="#虚拟机内存段" class="headerlink" title="虚拟机内存段"></a>虚拟机内存段</h4><p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/jvm.png" alt="jvm"></p>
+<p>可以看出，内存消耗大头是<code>mainspace</code>、<code>large object space</code>和<code>Bitmap</code>，mainspace为什么有两个呢？这是虚拟机在内存碎片整理的时候所用（之前的博客里提到过），所以对应优化可以从这两块内存下手：</p>
+<ul>
+<li>Java堆裁剪：屏蔽内存碎片整理这个过程，将一块mainspace空间释放</li>
+<li>LargeObjectSpace</li>
+<li>Bitmap：Android8以上Bitmap在Native堆里分配内存，而不再在Java堆里分配内存，所以这也导致了Java OOM减少，而Native OOM增多</li>
+</ul>
+<h4 id="unnamed内存段"><a href="#unnamed内存段" class="headerlink" title="unnamed内存段"></a>unnamed内存段</h4><p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/unnamed.png" alt="unnamed"></p>
+<ul>
+<li>webview：为了保证webview启动效率，Google在zygote阶段就给webview预留了一部分空间，但这部分空间不一定会被用到，而且现在很多公司自研浏览器内核，那这部分空间就是可以释放的（Android10 webview空间已经被命名了）</li>
+<li>线程：一个线程占据1M，但通常用不到1M，可以hook Java线程创建函数然后裁剪Java线程栈，同时线程栈也会存在泄漏问题可以治理。<h4 id="anon（已命名匿名内存段）"><a href="#anon（已命名匿名内存段）" class="headerlink" title="anon（已命名匿名内存段）"></a>anon（已命名匿名内存段）</h4></li>
+<li>libc_malloc：malloc/new申请的<strong>Native堆</strong>（占内存最多）<ul>
+<li>系统问题：jemalloc优化</li>
+<li>APP问题：<strong>堆内存泄漏监控</strong>（下文第三部分）</li>
+</ul>
+</li>
+<li>.bss：so和dex文件的bss段</li>
+<li>thread*：栈保护页，信号栈<h4 id="data内存段（文件映射）"><a href="#data内存段（文件映射）" class="headerlink" title="data内存段（文件映射）"></a>data内存段（文件映射）</h4>和system区分，data是app自己的而system是系统的。</li>
+</ul>
+<p>data目录下分<code>data/app/</code>和<code>data/data</code>，app目录下是so（动态库）、odex（字节码转换文件）等，优化空间较小，data目录下有plugins（插件）、webview等，如果下发插件比较多，plugins也占据很大。</p>
+<h4 id="system内存段（目录文件映射）"><a href="#system内存段（目录文件映射）" class="headerlink" title="system内存段（目录文件映射）"></a>system内存段（目录文件映射）</h4><p>system目录下由四部分，so（动态库），ttf（字库），dat和other，其中字库占据内存但有可能利用率极低，也可以释放一部分。</p>
+<h4 id="ashmen内存段"><a href="#ashmen内存段" class="headerlink" title="ashmen内存段"></a>ashmen内存段</h4><p>Google为了解决多进程的内存共享而做的Linux里的驱动，路径信息基本无效，调用链都是系统库函数，很难对应具体业务，解决方案：hook（命名or记录），收集更多业务相关信息进行治理</p>
+<h4 id="other"><a href="#other" class="headerlink" title="other"></a>other</h4><p>一般是设备文件</p>
+<h2 id="堆内存泄漏检测原理"><a href="#堆内存泄漏检测原理" class="headerlink" title="堆内存泄漏检测原理"></a>堆内存泄漏检测原理</h2><p>上一篇博客已经讲了内存泄漏检测的简单原理，这篇从代码角度加以阐述<br>系统malloc函数<br><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="comment">// @binoc/libc/binoc/malloc_debug_common.cpp</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> Malloc(function) je_ ## function</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug __libc_malloc_default_dispatch =  &#123;</span><br><span class="line">    Malloc(<span class="built_in">calloc</span>),</span><br><span class="line">    Malloc(<span class="built_in">free</span>),</span><br><span class="line">    Malloc(mallinfo),</span><br><span class="line">    Malloc(<span class="built_in">malloc</span>),</span><br><span class="line">    Malloc(malloc_usable_size),</span><br><span class="line">    Malloc(memalign),</span><br><span class="line">    ...</span><br><span class="line">&#125;;</span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug* __libc_malloc_dispatch = &amp;__libc_malloc_default_dispatch;</span><br><span class="line"><span class="keyword">extern</span> <span class="string">"C"</span> <span class="function"><span class="keyword">void</span>* <span class="title">malloc</span><span class="params">(<span class="keyword">size_t</span> bytes)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">return</span> __libc_malloc_dispatch-&gt;<span class="built_in">malloc</span>(bytes);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>hook原理<br><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> Proxy(function) proxy_ ## function</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug s_proxy_dispatch = &#123;</span><br><span class="line">    Proxy(<span class="built_in">calloc</span>),</span><br><span class="line">    Proxy(<span class="built_in">free</span>),</span><br><span class="line">    Proxy(mallinfo),</span><br><span class="line">    Proxy(<span class="built_in">malloc</span>),</span><br><span class="line">    Proxy(malloc_usable_size),</span><br><span class="line">    Proxy(memalign),</span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug* sDefaultDispatch = <span class="literal">NULL</span>;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">do_hook_malloc</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">void</span>* handle = npth_dlopen(<span class="string">"libc.so"</span>);</span><br><span class="line">    <span class="keyword">void</span>* libc_malloc_dispatch = npth_dlsym_symtab(handle, <span class="string">"__libc_malloc_dispatch"</span>);</span><br><span class="line">    npth_dlclose(handle);</span><br><span class="line"></span><br><span class="line">    sDefaultDispatch = *(<span class="keyword">static</span> <span class="keyword">const</span> MallocDebug **)lib_malloc_dispatch;</span><br><span class="line">    *(<span class="keyword">static</span> <span class="keyword">const</span> MallocDebug **)libc_malloc_dispatch = &amp;s_proxy_dispatch;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>代理函数<br><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span>* <span class="title">proxy_malloc</span><span class="params">(<span class="keyword">size_t</span> size)</span> </span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="keyword">void</span>* raddr = __builtin_return_address(<span class="number">0</span>);</span><br><span class="line">    <span class="keyword">void</span>* faddr = __builtin_frame_address(<span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">void</span>* ptr = sDefaultDispatch-&gt;<span class="built_in">malloc</span>(size); <span class="comment">// 执行原malloc</span></span><br><span class="line"></span><br><span class="line">    push_mem(ptr, size, raddr, faddr); <span class="comment">// 保存信息</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> ptr;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span>* <span class="title">proxy_free</span><span class="params">(<span class="keyword">void</span>* ptr)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    pop_mem(ptr); <span class="comment">//删除信息</span></span><br><span class="line"></span><br><span class="line">    sDefaultDispatch-&gt;<span class="built_in">free</span>(ptr); <span class="comment">// 执行原free</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>PS. <code>一般在分配的时候会获取当前的调用栈，但是调用栈获取可能很影响效率，所以这里获取函数返回地址和线程栈帧地址（都是从寄存器读，速度很快），返回地址可以定位函数，进而定位动态库，线程栈帧地址可以定位线程栈，进而定位线程。</code></p>
+]]></content>
+      <categories>
+        <category>客户端质量</category>
+      </categories>
+      <tags>
+        <tag>Android性能稳定性</tag>
+        <tag>内存管理</tag>
+        <tag>Android Native</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>Android Native内存泄漏管理（1）：基本概念/原理</title>
     <url>/2020/12/28/Android-Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%881%EF%BC%89%EF%BC%9A%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5-%E5%8E%9F%E7%90%86/</url>
     <content><![CDATA[<h2 id="Native内存基础"><a href="#Native内存基础" class="headerlink" title="Native内存基础"></a>Native内存基础</h2><h3 id="Native内存的基本概念"><a href="#Native内存的基本概念" class="headerlink" title="Native内存的基本概念"></a>Native内存的基本概念</h3><ul>
@@ -189,164 +284,6 @@
       </tags>
   </entry>
   <entry>
-    <title>Android Native内存泄漏管理（2）：Android内存分配与OOM解决方案</title>
-    <url>/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/</url>
-    <content><![CDATA[<h2 id="基本概念"><a href="#基本概念" class="headerlink" title="基本概念"></a>基本概念</h2><h3 id="OOM"><a href="#OOM" class="headerlink" title="OOM"></a>OOM</h3><p>OutOfMemory，Android平台上主要有三类：Java OOM，虚拟内存OOM，物理内存OOM，Java OOM指Java堆内存耗尽。</p>
-<p>物理内存即RAM，虚拟内存主要是为了满足操作系统和应用程序对物理内存的需求。虚拟内存有几个重要特点，第一个是<strong>按需分配</strong>，当分配虚拟内存时，内核先分配一个空闲地址区间，当cpu访问这个地址时，才分配实际物理页（真正使用的内存远小于实际分配的内存）。当cpu访问一个地址时，若发现当前地址未分配物理页，会触发<code>page fault</code>异常，在page fault异常处理中会给当前地址分配物理页，同时加载对应数据。第二个特点是<strong>按页分配</strong>，内核会以每次<code>4kb</code>为单位分配物理内存（内存页），为了减少内存分配的浪费。第三个特点是页表转换，在内存的申请/释放过程后，物理内存中会存在内存碎片，页表转换可以将不连续的物理内存映射到连续的虚拟内存地址。</p>
-<p>虚拟内存不涉及实际物理内存分配，所以理论上虚拟内存应该是无限的，但是地址空间又受限于cpu的寻址能力，32位cpu寻址范围最大4G，所以32位设备虚拟内存上限也是4GB左右。虚拟内存不足会引发<strong>App OOM</strong>，进而引发App崩溃。而物理内存是内核管理的，当物理内存无法满足内存申请时，内核会进行内存回收动作，具体有释放缓存、压缩内存、后台杀进程等。内核在回收内存时会持有内存的大锁，所以如page fault等操作会卡住，导致整个用户空间的执行会非常缓慢，具体表现就是<strong>app卡顿/anr/闪退</strong>，但一般不会导致OOM，因为应用程序的内存需求是按页分配的，这算是一种最低的要求，内存总能满足，如果内存连一个物理页也提供不了，就表明系统其它重要的流程也无法执行了，就会触发<strong>内核的OOM</strong>，具体的表现就是手机的重启。</p>
-<p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/VSS.png" alt="VSS"></p>
-<h3 id="内存表示"><a href="#内存表示" class="headerlink" title="内存表示"></a>内存表示</h3><div class="table-container">
-<table>
-<thead>
-<tr>
-<th>VSS</th>
-<th>虚拟内存大小</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>RSS</td>
-<td>实际使用（独占+共享）物理内存大小</td>
-</tr>
-<tr>
-<td>PSS</td>
-<td>Σ(独占物理页) + Σ(共享物理页/共享进程数)</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><strong>PSS越高 越容易在内核回收时被选中杀掉</strong></p>
-<h3 id="内存的申请"><a href="#内存的申请" class="headerlink" title="内存的申请"></a>内存的申请</h3><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span>* <span class="title">mmap</span><span class="params">(<span class="keyword">void</span>* start, <span class="comment">//起始地址，可以是空，也可以指定地址</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">size_t</span> length, <span class="comment">//内存长度</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">int</span> prot, <span class="comment">//访问属性 可读（r）可写（w）可执行（x）</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">int</span> falgs, <span class="comment">//MAP_ANONYMOUS/MAP_FIXED/MAP_PRIVATE/MAP_SHARED</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">int</span> fd, <span class="comment">//被映射文件的句柄，flags设置MAP_ANONYMOUS时忽略</span></span></span></span><br><span class="line"><span class="function"><span class="params">           <span class="keyword">off_t</span> offset)</span></span>; <span class="comment">//被映射文件的偏移，必须是page size整数倍</span></span><br></pre></td></tr></table></figure>
-<ul>
-<li>文件映射<ul>
-<li>flags未设置MAP_ANONYMOUS</li>
-<li>fd指向一个已经打开的文件<ul>
-<li>设备文件：dev</li>
-<li>普通文件：system/data/vendor/sdcard</li>
-</ul>
-</li>
-<li>内存段名是文件路径<ul>
-<li>设备文件可以通过ioctl(ctl: control)修改内存段名</li>
-</ul>
-</li>
-</ul>
-</li>
-<li>匿名映射<ul>
-<li>flags设置MAP_ANONYMOUS</li>
-<li>fd一般为-1</li>
-<li>内存段名默认为空<ul>
-<li>可通过prctl设置成<code>anon:xxx</code>(Android10以后webview就是这样)</li>
-</ul>
-</li>
-</ul>
-</li>
-<li>其他映射函数：mremap/munmap/mprotect/ioctl/prctl</li>
-</ul>
-<h2 id="内存分类分布与对应优化"><a href="#内存分类分布与对应优化" class="headerlink" title="内存分类分布与对应优化"></a>内存分类分布与对应优化</h2><h3 id="内存分类与分布"><a href="#内存分类与分布" class="headerlink" title="内存分类与分布"></a>内存分类与分布</h3><p>案例分析：32位设备运行32位app，总虚拟内存3G左右，从zygote到OOM这个过程中各阶段虚拟内存增量情况</p>
-<p>注：</p>
-<ul>
-<li>zygoat：所有应用进程的父进程，app进程都由这个进程孵化而来）</li>
-<li>dalvik：dalvik虚拟机所占据内存</li>
-</ul>
-<p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/lifecycle.png" alt="lifecycle"></p>
-<h3 id="具体内存段的对应优化方案"><a href="#具体内存段的对应优化方案" class="headerlink" title="具体内存段的对应优化方案"></a>具体内存段的对应优化方案</h3><h4 id="虚拟机内存段"><a href="#虚拟机内存段" class="headerlink" title="虚拟机内存段"></a>虚拟机内存段</h4><p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/jvm.png" alt="jvm"></p>
-<p>可以看出，内存消耗大头是<code>mainspace</code>、<code>large object space</code>和<code>Bitmap</code>，mainspace为什么有两个呢？这是虚拟机在内存碎片整理的时候所用（之前的博客里提到过），所以对应优化可以从这两块内存下手：</p>
-<ul>
-<li>Java堆裁剪：屏蔽内存碎片整理这个过程，将一块mainspace空间释放</li>
-<li>LargeObjectSpace</li>
-<li>Bitmap：Android8以上Bitmap在Native堆里分配内存，而不再在Java堆里分配内存，所以这也导致了Java OOM减少，而Native OOM增多</li>
-</ul>
-<h4 id="unnamed内存段"><a href="#unnamed内存段" class="headerlink" title="unnamed内存段"></a>unnamed内存段</h4><p><img src="/2020/12/30/Android%20Native%E5%86%85%E5%AD%98%E6%B3%84%E6%BC%8F%E7%AE%A1%E7%90%86%EF%BC%882%EF%BC%89%EF%BC%9AAndroid%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E4%B8%8EOOM%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88/unnamed.png" alt="unnamed"></p>
-<ul>
-<li>webview：为了保证webview启动效率，Google在zygote阶段就给webview预留了一部分空间，但这部分空间不一定会被用到，而且现在很多公司自研浏览器内核，那这部分空间就是可以释放的（Android10 webview空间已经被命名了）</li>
-<li>线程：一个线程占据1M，但通常用不到1M，可以hook Java线程创建函数然后裁剪Java线程栈，同时线程栈也会存在泄漏问题可以治理。<h4 id="anon（已命名匿名内存段）"><a href="#anon（已命名匿名内存段）" class="headerlink" title="anon（已命名匿名内存段）"></a>anon（已命名匿名内存段）</h4></li>
-<li>libc_malloc：malloc/new申请的<strong>Native堆</strong>（占内存最多）<ul>
-<li>系统问题：jemalloc优化</li>
-<li>APP问题：<strong>堆内存泄漏监控</strong>（下文第三部分）</li>
-</ul>
-</li>
-<li>.bss：so和dex文件的bss段</li>
-<li>thread*：栈保护页，信号栈<h4 id="data内存段（文件映射）"><a href="#data内存段（文件映射）" class="headerlink" title="data内存段（文件映射）"></a>data内存段（文件映射）</h4>和system区分，data是app自己的而system是系统的。</li>
-</ul>
-<p>data目录下分<code>data/app/</code>和<code>data/data</code>，app目录下是so（动态库）、odex（字节码转换文件）等，优化空间较小，data目录下有plugins（插件）、webview等，如果下发插件比较多，plugins也占据很大。</p>
-<h4 id="system内存段（目录文件映射）"><a href="#system内存段（目录文件映射）" class="headerlink" title="system内存段（目录文件映射）"></a>system内存段（目录文件映射）</h4><p>system目录下由四部分，so（动态库），ttf（字库），dat和other，其中字库占据内存但有可能利用率极低，也可以释放一部分。</p>
-<h4 id="ashmen内存段"><a href="#ashmen内存段" class="headerlink" title="ashmen内存段"></a>ashmen内存段</h4><p>Google为了解决多进程的内存共享而做的Linux里的驱动，路径信息基本无效，调用链都是系统库函数，很难对应具体业务，解决方案：hook（命名or记录），收集更多业务相关信息进行治理</p>
-<h4 id="other"><a href="#other" class="headerlink" title="other"></a>other</h4><p>一般是设备文件</p>
-<h2 id="堆内存泄漏检测原理"><a href="#堆内存泄漏检测原理" class="headerlink" title="堆内存泄漏检测原理"></a>堆内存泄漏检测原理</h2><p>上一篇博客已经讲了内存泄漏检测的简单原理，这篇从代码角度加以阐述<br>系统malloc函数<br><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="comment">// @binoc/libc/binoc/malloc_debug_common.cpp</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> Malloc(function) je_ ## function</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug __libc_malloc_default_dispatch =  &#123;</span><br><span class="line">    Malloc(<span class="built_in">calloc</span>),</span><br><span class="line">    Malloc(<span class="built_in">free</span>),</span><br><span class="line">    Malloc(mallinfo),</span><br><span class="line">    Malloc(<span class="built_in">malloc</span>),</span><br><span class="line">    Malloc(malloc_usable_size),</span><br><span class="line">    Malloc(memalign),</span><br><span class="line">    ...</span><br><span class="line">&#125;;</span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug* __libc_malloc_dispatch = &amp;__libc_malloc_default_dispatch;</span><br><span class="line"><span class="keyword">extern</span> <span class="string">"C"</span> <span class="function"><span class="keyword">void</span>* <span class="title">malloc</span><span class="params">(<span class="keyword">size_t</span> bytes)</span> </span>&#123;</span><br><span class="line">    <span class="keyword">return</span> __libc_malloc_dispatch-&gt;<span class="built_in">malloc</span>(bytes);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>hook原理<br><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> Proxy(function) proxy_ ## function</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug s_proxy_dispatch = &#123;</span><br><span class="line">    Proxy(<span class="built_in">calloc</span>),</span><br><span class="line">    Proxy(<span class="built_in">free</span>),</span><br><span class="line">    Proxy(mallinfo),</span><br><span class="line">    Proxy(<span class="built_in">malloc</span>),</span><br><span class="line">    Proxy(malloc_usable_size),</span><br><span class="line">    Proxy(memalign),</span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">static</span> <span class="keyword">const</span> MallocDebug* sDefaultDispatch = <span class="literal">NULL</span>;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">do_hook_malloc</span><span class="params">()</span> </span>&#123;</span><br><span class="line">    <span class="keyword">void</span>* handle = npth_dlopen(<span class="string">"libc.so"</span>);</span><br><span class="line">    <span class="keyword">void</span>* libc_malloc_dispatch = npth_dlsym_symtab(handle, <span class="string">"__libc_malloc_dispatch"</span>);</span><br><span class="line">    npth_dlclose(handle);</span><br><span class="line"></span><br><span class="line">    sDefaultDispatch = *(<span class="keyword">static</span> <span class="keyword">const</span> MallocDebug **)lib_malloc_dispatch;</span><br><span class="line">    *(<span class="keyword">static</span> <span class="keyword">const</span> MallocDebug **)libc_malloc_dispatch = &amp;s_proxy_dispatch;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>代理函数<br><figure class="highlight cpp"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span>* <span class="title">proxy_malloc</span><span class="params">(<span class="keyword">size_t</span> size)</span> </span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="keyword">void</span>* raddr = __builtin_return_address(<span class="number">0</span>);</span><br><span class="line">    <span class="keyword">void</span>* faddr = __builtin_frame_address(<span class="number">0</span>);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">void</span>* ptr = sDefaultDispatch-&gt;<span class="built_in">malloc</span>(size); <span class="comment">// 执行原malloc</span></span><br><span class="line"></span><br><span class="line">    push_mem(ptr, size, raddr, faddr); <span class="comment">// 保存信息</span></span><br><span class="line"></span><br><span class="line">    <span class="keyword">return</span> ptr;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">static</span> <span class="keyword">void</span>* <span class="title">proxy_free</span><span class="params">(<span class="keyword">void</span>* ptr)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    pop_mem(ptr); <span class="comment">//删除信息</span></span><br><span class="line"></span><br><span class="line">    sDefaultDispatch-&gt;<span class="built_in">free</span>(ptr); <span class="comment">// 执行原free</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>PS. <code>一般在分配的时候会获取当前的调用栈，但是调用栈获取可能很影响效率，所以这里获取函数返回地址和线程栈帧地址（都是从寄存器读，速度很快），返回地址可以定位函数，进而定位动态库，线程栈帧地址可以定位线程栈，进而定位线程。</code></p>
-]]></content>
-      <categories>
-        <category>客户端质量</category>
-      </categories>
-      <tags>
-        <tag>Android性能稳定性</tag>
-        <tag>内存管理</tag>
-        <tag>Android Native</tag>
-      </tags>
-  </entry>
-  <entry>
-    <title>Java虚拟机学习笔记二：GC算法初探</title>
-    <url>/2020/05/31/Java%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0%E4%BA%8C%EF%BC%9AGC%E7%AE%97%E6%B3%95%E5%88%9D%E6%8E%A2/</url>
-    <content><![CDATA[<h2 id="常见对象存活判定算法"><a href="#常见对象存活判定算法" class="headerlink" title="常见对象存活判定算法"></a>常见对象存活判定算法</h2><h3 id="引用计数法"><a href="#引用计数法" class="headerlink" title="引用计数法"></a>引用计数法</h3><p>具体方法是，在对象中添加一个引用计数器，每当有一个地方引用它时，计数器+1，当引用失效时，计数器-1，如果计数器为零，就说明没有地方在引用它。这个方法看似原理很简单，效率也高，但其实需要很多额外的考虑才能保证这个判定过程正确执行，比如单纯的引用计数很难解决对象间的循环引用的问题，举个例子：<br><figure class="highlight java"><table><tr><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">ReferenceCountingGC</span> </span>&#123;</span><br><span class="line">	</span><br><span class="line">	<span class="keyword">private</span> Object instance=<span class="keyword">null</span>;</span><br><span class="line">	<span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> _1MB=<span class="number">1024</span>*<span class="number">1024</span>;</span><br><span class="line">	<span class="keyword">private</span> <span class="keyword">byte</span>[] bigSize=<span class="keyword">new</span> <span class="keyword">byte</span>[<span class="number">1024</span>*<span class="number">1024</span>];<span class="comment">//1MB的堆空间</span></span><br><span class="line"> </span><br><span class="line">	<span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">		ReferenceCountingGC objA=<span class="keyword">new</span> ReferenceCountingGC(); <span class="comment">// step1</span></span><br><span class="line">		ReferenceCountingGC objB=<span class="keyword">new</span> ReferenceCountingGC(); <span class="comment">// step2</span></span><br><span class="line">		objA.instance=objB; <span class="comment">// step3</span></span><br><span class="line">		objB.instance=objA; <span class="comment">// step4</span></span><br><span class="line">		objA=<span class="keyword">null</span>; <span class="comment">// step5</span></span><br><span class="line">		objB=<span class="keyword">null</span>; <span class="comment">// step6</span></span><br><span class="line">	&#125;</span><br><span class="line"> </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>分析一下这段代码，首先经过了step1和step2之后，虚拟机栈的局部变量表里有两个reference类型变量，objA和objB，他们分别指向堆上的两个ReferenceCountingGC对象实例，我们用实例A和实例B表示，实例A因为objA引用它，所以计数器加1，cntA = 1，同理cntB = 1；step3阶段，实例B被实例A的instance成员引用，cntB = 2，同理step4阶段cntA = 2。step5阶段，栈帧中的objA不再指向实例A，cntA = 1，step6阶段，栈帧中的objB不再指向实例B，cntB = 1。到此，实例A和实例B的引用计数器均不为0，如果只是单纯的引用计数法，这便产生了<strong>内存泄漏</strong></p>
-<h3 id="可达性分析法"><a href="#可达性分析法" class="headerlink" title="可达性分析法"></a>可达性分析法</h3><p>可达性分析法就是通过一系列的<strong>GC Root</strong>根对象作为起始节点，用类似二叉树遍历的方法向下搜索，如果GC Root到某个对象<strong>不可达</strong>，这时的对象就是不可能再被引用的，会被回收掉。</p>
-<p>可作为GC Root的对象包含下面几种：</p>
-<ul>
-<li><strong>虚拟机栈本地变量表中引用的对象</strong></li>
-<li><strong>方法区中常量引用的对象、静态属性引用的变量</strong></li>
-<li>本地方法区中JNI引用的变量</li>
-<li>Java虚拟机内部的引用，比如异常对象<code>NullPointerException</code></li>
-<li>所有被同步锁（synchronized关键字）持有的对象</li>
-<li>反映Java虚拟机内部情况的JMXBean、JVMTI中注册的回调、本地代码的缓存等…</li>
-</ul>
-<p>除了这些固定的对象之外，根据垃圾收集的区域不同，还可以有其他对象临时加入，因为根据虚拟机自己的实现细节，某个区域里的对象完全有可能被其他区域对象所引用</p>
-<h2 id="对象的引用分类（强度依次递减）"><a href="#对象的引用分类（强度依次递减）" class="headerlink" title="对象的引用分类（强度依次递减）"></a>对象的引用分类（强度依次递减）</h2><ul>
-<li>强引用：例如<code>Object a = new Object()</code>只要强引用关系存在，对象就不会被回收</li>
-<li>软引用：还有用，但非必须的对象，这部分对象会在系统将要内存溢出前进行回收</li>
-<li>弱引用：一旦发起垃圾回收，就会回收弱引用的对象</li>
-<li>虚引用：“形同虚设”，一个对象是否有虚引用，完全不影响它的生命周期。虚引用与软引用和弱引用的一个区别在于：虚引用必须和引用队列（ReferenceQueue）联合使用。当垃圾回收器准备回收一个对象时，如果发现它还有虚引用，就会在回收对象的内存之前，把这个虚引用加入到与之关联的引用队列中。程序可以通过判断引用队列中是否已经加入了虚引用，来了解被引用的对象是否将要被垃圾回收。</li>
-</ul>
-<h2 id="finalize-方法"><a href="#finalize-方法" class="headerlink" title="finalize()方法"></a>finalize()方法</h2><p>要真正宣告一个对象的死亡，至少要经过两次标记过程：第一次是可达性分析后发现不可达，被第一次标记；第二次是一次筛选，筛选条件是此对象是否有必要执行<code>finalize()</code>方法，如果对象未覆盖<code>finalize()</code>方法，或者<code>finalize()</code>方法已经被对象调用过，那就没必要执行，假如被判定为有必要执行，那么该对象会被放在一个名为F-Queue的队列中，稍后由一条虚拟机自动建立的、<strong>低调度优先级</strong>的Finalize()线程执行队列中对象的finalize()方法。执行是指仅仅触发，并不会等待一个对象执行完，因为假如一个对象的finalize()方法运行缓慢，如果等待的话会影响其他对象的回收。</p>
-<p>finalize()有点类似C/C++的析构函数，这个语法当初就是为了迎合C/C++程序员而做的一项妥协，但这个语法不合适当成析构函数用，因为它运行代价高昂，不确定性大，无法保证各个对象的调用顺序，已经被官方声明为不推荐的语法。</p>
-<p>finalize()方法是对象最后的抢救机会，假如对象在此方法中又与GC Root建立了联系，那么这个对象实例就会逃过这次GC，但一个实例的finalize方法只会被执行一次，所以在下一次GC发起时，这个对象不会再因为finalize方法而再逃一次。</p>
-<h2 id="方法区的回收"><a href="#方法区的回收" class="headerlink" title="方法区的回收"></a>方法区的回收</h2><p>方法区的垃圾回收收益远不及堆区，所以一般不要求虚拟机在方法区中实现垃圾收集，但有些情况下，方法区也会有一些较大的内存压力，那么方法区如何垃圾回收呢？</p>
-<p>从上一篇博客我们知道，方法区主要有两部分数据，<strong>类型信息</strong>和<strong>常量池</strong>，常量池中常量的回收比较简单，类似于对象，但判断一个类型是否属于<strong>不再被使用的类</strong>条件就比较苛刻了，需要同时满足下面三个条件：</p>
-<ul>
-<li>该类所有实例已经被回收，堆中不存在该类或者任何派生类的实例</li>
-<li>加载该类的类加载器已经被回收</li>
-<li>该类对应的<code>java.lang.Class</code>对象没有在任何地方被引用，无法在任何地方通过反射获取这个类的方法</li>
-</ul>
-<p>如果同时满足了上述三个条件，那么该类型便<strong>允许被回收</strong>，而并不是像对象那样，<strong>必然被回收</strong></p>
-<h2 id="垃圾收集算法"><a href="#垃圾收集算法" class="headerlink" title="垃圾收集算法"></a>垃圾收集算法</h2><p>上文说，对象判活有两种算法，引用计数和可达性分析，从这两个算法出发，垃圾收集算法可以分为<strong>引用计数式垃圾收集</strong>和<strong>追踪式垃圾收集</strong>。主流的是追踪式垃圾收集。</p>
-<h3 id="分代收集理论"><a href="#分代收集理论" class="headerlink" title="分代收集理论"></a>分代收集理论</h3><p>在垃圾回收时，虚拟机要关注的对象体量是非常庞大的，假如每次都要遍历一边，无疑会造成很多性能上的损失，于是提出了分代收集理论，将Java堆划分出不同区域，然后将对象按照年龄（年龄即熬过垃圾收集过程的次数）分配到不同区域中，这个理论是建立在两个分代假说之上：</p>
-<ol>
-<li>弱分代假说：绝大多数对象都是朝生夕灭</li>
-<li>强分代假说：熬过越多次垃圾收集的对象越难消亡</li>
-</ol>
-<p>根据这两个假说，大部分虚拟机将Java堆划分成<strong>新生代</strong>和<strong>老年代</strong>，新生代中存放朝生夕灭的对象，每次垃圾回收时都有大批量对象死去，而每次回收后存活的少量对象，将晋升到老年代中存放，老年代对象因为很难消亡，所以只需很低的频次对这块区域进行回收即可，这样就比原先每次遍历整个堆效率提升了很多。</p>
-<p>但仔细思考一下，分代收集真的只是划分一下区域这么简单吗？这里其实存在一个问题，对象不是孤立的，而是存在跨代引用。假如现在要进行一次只针对新生代的收集（Minor GC），但新生代中的对象完全有可能被老年代中对象引用，这样的话，GC Root就得再加上老年代对象，来进行可达性分析，这种方案理论可行，但也会为内存增大很大负担，所以垃圾分代理论有了第三条经验法则：</p>
-<ol>
-<li>跨代引用假说：跨代引用相对于同代引用来说仅占极少数</li>
-</ol>
-<p>有了这条假说，我们就不必为了少量的跨代引用去扫描整个老年代，只需要在新生代上建立一个<strong>记忆集</strong>（Remember Set），这个结构作用是将老年代划分成若干小块，标示出哪一块会存在跨代引用，此后每次进行Minor GC时，只需将跨代引用的那一小块加入GC Root中，这个做法会增加一些运行时常数复杂度的开销，但相比于扫描整个老年代仍是划算的。</p>
-<h3 id="三种垃圾收集算法"><a href="#三种垃圾收集算法" class="headerlink" title="三种垃圾收集算法"></a>三种垃圾收集算法</h3><h4 id="标记-清除算法"><a href="#标记-清除算法" class="headerlink" title="标记-清除算法"></a>标记-清除算法</h4><p>扫描一遍对象之后，标记出哪些可回收哪些不可回收，接着保留不可回收的，清除可回收的，这个算法最为简单，也是后面两个算法的基础，它有几个显而易见的缺点：</p>
-<ul>
-<li>执行效率不稳定，假如Java堆中对象数量很大，并且大部分都是需要回收的，那么要进行大量的标记清除工作，执行效率就会降低</li>
-<li>直接原地清除的话会产生大量不连续的内存碎片，如果内存碎片太多，程序运行也需要分配较大对象的话，可能会出现无法找到足够的连续内存而提前出发GC</li>
-</ul>
-<h4 id="标记-复制算法"><a href="#标记-复制算法" class="headerlink" title="标记-复制算法"></a>标记-复制算法</h4><p>为了解决标记-清除算法面对大量可回收对象时执行效率低的问题，有人提出了<strong>半区复制</strong>算法，将可用内存划为大小相等的两块，当一块内存用完时，将存活的对象复制到另一块空间上，并将自身已经使用的内存空间一次性清理掉。如果内存中大量的对象都是存活的，那么这个算法将产生大量的复制开销，但如果大多数内存都是可回收的，那么算法每次复制的就是少量的存活对象，并且这种算法也不会出现空间碎片的情况。但这个算法还有点不足，内存缩小为原先的二分之一，空间浪费太大。</p>
-<p>因为这种算法适用大多数内存可回收的情况，所以很多商用JVM用这个算法来回收新生代，根据新生代朝生夕灭的特点，有人对这个算法做了改进，弥补了空间浪费这个缺点，被称为<strong>Appel式回收</strong>。</p>
-<p>Appel式回收的具体做法是将新生代划为一块较大的Eden区，两块较小的survivor区，内存大小比例是8:1:1，每次分配内存<strong>只在Eden区和一块survivor区上进行</strong>，发生垃圾收集时，将Eden区和survivor区上的存活对象复制到另一块survivor区上，然后对Eden区和已用的survivor区清理内存，这样的话，每次新生代的空间利用率可以达到90%，假如存活对象太多，一块survivor区不足以承载怎么办呢？Appel式回收提供了一个<strong>逃生门</strong>的设计，如果survivor区空间不够，就会依赖别的内存区域（多数是老年代）进行内存担保，借一块内存。</p>
-<h4 id="标记-整理算法"><a href="#标记-整理算法" class="headerlink" title="标记-整理算法"></a>标记-整理算法</h4><p>这种算法是针对老年代的特点提出的，其标记过程仍与“标记-清除”算法一样，但后续步骤不是对对象进行清理，而是将所有存活对象都向内存空间一端移动，然后直接清除掉边界外的内存。因为老年代中存活的对象很多，所以移动对象并更新对象引用是一个极为负重的操作，并且对象的移动操作必须要<strong>全程暂停用户应用线程</strong>才能进行，这无疑是增加延迟的。但如果和标记-清除算法一样不考虑移动整理存活对象的话，空间碎片化问题只能依赖更为复杂的内存分配器/内存访问器解决（比如像计算机硬盘存储大文件那样），两者均有利弊，那到底是整理内存还是不整理呢？从整个程序的吞吐量来看，因为内存分配和访问相比于垃圾收集频率要大得多，所以权衡利弊，应该用垃圾收集时的短暂延迟换取内存分配访问所耗费的时间复杂度。</p>
-<p>另外，也可以两者兼顾，让虚拟机平时多数时间采用标记-清除算法，当内存碎片化程度高于一定阈值时，再采用标记-整理算法收集一次，换取规整的内存空间。</p>
-]]></content>
-      <categories>
-        <category>Java</category>
-      </categories>
-      <tags>
-        <tag>Java</tag>
-        <tag>JVM</tag>
-      </tags>
-  </entry>
-  <entry>
     <title>FFmpeg对SSIM的实现</title>
     <url>/2020/05/03/FFmpeg%E5%AF%B9SSIM%E7%9A%84%E5%AE%9E%E7%8E%B0/</url>
     <content><![CDATA[<p>源码：tiny_ssim.c</p>
@@ -447,6 +384,69 @@ SSIM(a,b)=\frac{(2fs1*fs2+64^2C_1)(2*64fs12-2fs1fs2+63*64C_2)}{(fs1^2+fs2^2+64^2
 <li>句柄定位：上文我们提到，在虚拟机虚拟机栈的局部变量表中，有一个“reference”引用类型，如果是句柄定位的话，reference类型就指向<strong>堆内存中句柄池</strong>里的一个句柄，这个句柄包含两方面信息（指针），对象实例信息，对象类型信息，一个指针指向<strong>堆内存中实例池</strong>里的对象实例，一个指针指向<strong>方法区</strong>的对象类型数据。这个的优点是，如果对象实例被移动（比如垃圾回收时），只会改变句柄中的对应地址，而reference地址是稳定的</li>
 <li>直接指针定位（hotspot主要使用这个方法）：reference存储的就是<strong>堆内存</strong>里对象的地址，这样只需要一步就能直接访问到对象的实例数据，由上文对象的布局我们也可以知道，对象头里有一个类型指针，这个类型指针也会和句柄定位一样，指向方法区的类型数据</li>
 </ol>
+]]></content>
+      <categories>
+        <category>Java</category>
+      </categories>
+      <tags>
+        <tag>Java</tag>
+        <tag>JVM</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>Java虚拟机学习笔记二：GC算法初探</title>
+    <url>/2020/05/31/Java%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0%E4%BA%8C%EF%BC%9AGC%E7%AE%97%E6%B3%95%E5%88%9D%E6%8E%A2/</url>
+    <content><![CDATA[<h2 id="常见对象存活判定算法"><a href="#常见对象存活判定算法" class="headerlink" title="常见对象存活判定算法"></a>常见对象存活判定算法</h2><h3 id="引用计数法"><a href="#引用计数法" class="headerlink" title="引用计数法"></a>引用计数法</h3><p>具体方法是，在对象中添加一个引用计数器，每当有一个地方引用它时，计数器+1，当引用失效时，计数器-1，如果计数器为零，就说明没有地方在引用它。这个方法看似原理很简单，效率也高，但其实需要很多额外的考虑才能保证这个判定过程正确执行，比如单纯的引用计数很难解决对象间的循环引用的问题，举个例子：<br><figure class="highlight java"><table><tr><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">ReferenceCountingGC</span> </span>&#123;</span><br><span class="line">	</span><br><span class="line">	<span class="keyword">private</span> Object instance=<span class="keyword">null</span>;</span><br><span class="line">	<span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> _1MB=<span class="number">1024</span>*<span class="number">1024</span>;</span><br><span class="line">	<span class="keyword">private</span> <span class="keyword">byte</span>[] bigSize=<span class="keyword">new</span> <span class="keyword">byte</span>[<span class="number">1024</span>*<span class="number">1024</span>];<span class="comment">//1MB的堆空间</span></span><br><span class="line"> </span><br><span class="line">	<span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">		ReferenceCountingGC objA=<span class="keyword">new</span> ReferenceCountingGC(); <span class="comment">// step1</span></span><br><span class="line">		ReferenceCountingGC objB=<span class="keyword">new</span> ReferenceCountingGC(); <span class="comment">// step2</span></span><br><span class="line">		objA.instance=objB; <span class="comment">// step3</span></span><br><span class="line">		objB.instance=objA; <span class="comment">// step4</span></span><br><span class="line">		objA=<span class="keyword">null</span>; <span class="comment">// step5</span></span><br><span class="line">		objB=<span class="keyword">null</span>; <span class="comment">// step6</span></span><br><span class="line">	&#125;</span><br><span class="line"> </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>分析一下这段代码，首先经过了step1和step2之后，虚拟机栈的局部变量表里有两个reference类型变量，objA和objB，他们分别指向堆上的两个ReferenceCountingGC对象实例，我们用实例A和实例B表示，实例A因为objA引用它，所以计数器加1，cntA = 1，同理cntB = 1；step3阶段，实例B被实例A的instance成员引用，cntB = 2，同理step4阶段cntA = 2。step5阶段，栈帧中的objA不再指向实例A，cntA = 1，step6阶段，栈帧中的objB不再指向实例B，cntB = 1。到此，实例A和实例B的引用计数器均不为0，如果只是单纯的引用计数法，这便产生了<strong>内存泄漏</strong></p>
+<h3 id="可达性分析法"><a href="#可达性分析法" class="headerlink" title="可达性分析法"></a>可达性分析法</h3><p>可达性分析法就是通过一系列的<strong>GC Root</strong>根对象作为起始节点，用类似二叉树遍历的方法向下搜索，如果GC Root到某个对象<strong>不可达</strong>，这时的对象就是不可能再被引用的，会被回收掉。</p>
+<p>可作为GC Root的对象包含下面几种：</p>
+<ul>
+<li><strong>虚拟机栈本地变量表中引用的对象</strong></li>
+<li><strong>方法区中常量引用的对象、静态属性引用的变量</strong></li>
+<li>本地方法区中JNI引用的变量</li>
+<li>Java虚拟机内部的引用，比如异常对象<code>NullPointerException</code></li>
+<li>所有被同步锁（synchronized关键字）持有的对象</li>
+<li>反映Java虚拟机内部情况的JMXBean、JVMTI中注册的回调、本地代码的缓存等…</li>
+</ul>
+<p>除了这些固定的对象之外，根据垃圾收集的区域不同，还可以有其他对象临时加入，因为根据虚拟机自己的实现细节，某个区域里的对象完全有可能被其他区域对象所引用</p>
+<h2 id="对象的引用分类（强度依次递减）"><a href="#对象的引用分类（强度依次递减）" class="headerlink" title="对象的引用分类（强度依次递减）"></a>对象的引用分类（强度依次递减）</h2><ul>
+<li>强引用：例如<code>Object a = new Object()</code>只要强引用关系存在，对象就不会被回收</li>
+<li>软引用：还有用，但非必须的对象，这部分对象会在系统将要内存溢出前进行回收</li>
+<li>弱引用：一旦发起垃圾回收，就会回收弱引用的对象</li>
+<li>虚引用：“形同虚设”，一个对象是否有虚引用，完全不影响它的生命周期。虚引用与软引用和弱引用的一个区别在于：虚引用必须和引用队列（ReferenceQueue）联合使用。当垃圾回收器准备回收一个对象时，如果发现它还有虚引用，就会在回收对象的内存之前，把这个虚引用加入到与之关联的引用队列中。程序可以通过判断引用队列中是否已经加入了虚引用，来了解被引用的对象是否将要被垃圾回收。</li>
+</ul>
+<h2 id="finalize-方法"><a href="#finalize-方法" class="headerlink" title="finalize()方法"></a>finalize()方法</h2><p>要真正宣告一个对象的死亡，至少要经过两次标记过程：第一次是可达性分析后发现不可达，被第一次标记；第二次是一次筛选，筛选条件是此对象是否有必要执行<code>finalize()</code>方法，如果对象未覆盖<code>finalize()</code>方法，或者<code>finalize()</code>方法已经被对象调用过，那就没必要执行，假如被判定为有必要执行，那么该对象会被放在一个名为F-Queue的队列中，稍后由一条虚拟机自动建立的、<strong>低调度优先级</strong>的Finalize()线程执行队列中对象的finalize()方法。执行是指仅仅触发，并不会等待一个对象执行完，因为假如一个对象的finalize()方法运行缓慢，如果等待的话会影响其他对象的回收。</p>
+<p>finalize()有点类似C/C++的析构函数，这个语法当初就是为了迎合C/C++程序员而做的一项妥协，但这个语法不合适当成析构函数用，因为它运行代价高昂，不确定性大，无法保证各个对象的调用顺序，已经被官方声明为不推荐的语法。</p>
+<p>finalize()方法是对象最后的抢救机会，假如对象在此方法中又与GC Root建立了联系，那么这个对象实例就会逃过这次GC，但一个实例的finalize方法只会被执行一次，所以在下一次GC发起时，这个对象不会再因为finalize方法而再逃一次。</p>
+<h2 id="方法区的回收"><a href="#方法区的回收" class="headerlink" title="方法区的回收"></a>方法区的回收</h2><p>方法区的垃圾回收收益远不及堆区，所以一般不要求虚拟机在方法区中实现垃圾收集，但有些情况下，方法区也会有一些较大的内存压力，那么方法区如何垃圾回收呢？</p>
+<p>从上一篇博客我们知道，方法区主要有两部分数据，<strong>类型信息</strong>和<strong>常量池</strong>，常量池中常量的回收比较简单，类似于对象，但判断一个类型是否属于<strong>不再被使用的类</strong>条件就比较苛刻了，需要同时满足下面三个条件：</p>
+<ul>
+<li>该类所有实例已经被回收，堆中不存在该类或者任何派生类的实例</li>
+<li>加载该类的类加载器已经被回收</li>
+<li>该类对应的<code>java.lang.Class</code>对象没有在任何地方被引用，无法在任何地方通过反射获取这个类的方法</li>
+</ul>
+<p>如果同时满足了上述三个条件，那么该类型便<strong>允许被回收</strong>，而并不是像对象那样，<strong>必然被回收</strong></p>
+<h2 id="垃圾收集算法"><a href="#垃圾收集算法" class="headerlink" title="垃圾收集算法"></a>垃圾收集算法</h2><p>上文说，对象判活有两种算法，引用计数和可达性分析，从这两个算法出发，垃圾收集算法可以分为<strong>引用计数式垃圾收集</strong>和<strong>追踪式垃圾收集</strong>。主流的是追踪式垃圾收集。</p>
+<h3 id="分代收集理论"><a href="#分代收集理论" class="headerlink" title="分代收集理论"></a>分代收集理论</h3><p>在垃圾回收时，虚拟机要关注的对象体量是非常庞大的，假如每次都要遍历一边，无疑会造成很多性能上的损失，于是提出了分代收集理论，将Java堆划分出不同区域，然后将对象按照年龄（年龄即熬过垃圾收集过程的次数）分配到不同区域中，这个理论是建立在两个分代假说之上：</p>
+<ol>
+<li>弱分代假说：绝大多数对象都是朝生夕灭</li>
+<li>强分代假说：熬过越多次垃圾收集的对象越难消亡</li>
+</ol>
+<p>根据这两个假说，大部分虚拟机将Java堆划分成<strong>新生代</strong>和<strong>老年代</strong>，新生代中存放朝生夕灭的对象，每次垃圾回收时都有大批量对象死去，而每次回收后存活的少量对象，将晋升到老年代中存放，老年代对象因为很难消亡，所以只需很低的频次对这块区域进行回收即可，这样就比原先每次遍历整个堆效率提升了很多。</p>
+<p>但仔细思考一下，分代收集真的只是划分一下区域这么简单吗？这里其实存在一个问题，对象不是孤立的，而是存在跨代引用。假如现在要进行一次只针对新生代的收集（Minor GC），但新生代中的对象完全有可能被老年代中对象引用，这样的话，GC Root就得再加上老年代对象，来进行可达性分析，这种方案理论可行，但也会为内存增大很大负担，所以垃圾分代理论有了第三条经验法则：</p>
+<ol>
+<li>跨代引用假说：跨代引用相对于同代引用来说仅占极少数</li>
+</ol>
+<p>有了这条假说，我们就不必为了少量的跨代引用去扫描整个老年代，只需要在新生代上建立一个<strong>记忆集</strong>（Remember Set），这个结构作用是将老年代划分成若干小块，标示出哪一块会存在跨代引用，此后每次进行Minor GC时，只需将跨代引用的那一小块加入GC Root中，这个做法会增加一些运行时常数复杂度的开销，但相比于扫描整个老年代仍是划算的。</p>
+<h3 id="三种垃圾收集算法"><a href="#三种垃圾收集算法" class="headerlink" title="三种垃圾收集算法"></a>三种垃圾收集算法</h3><h4 id="标记-清除算法"><a href="#标记-清除算法" class="headerlink" title="标记-清除算法"></a>标记-清除算法</h4><p>扫描一遍对象之后，标记出哪些可回收哪些不可回收，接着保留不可回收的，清除可回收的，这个算法最为简单，也是后面两个算法的基础，它有几个显而易见的缺点：</p>
+<ul>
+<li>执行效率不稳定，假如Java堆中对象数量很大，并且大部分都是需要回收的，那么要进行大量的标记清除工作，执行效率就会降低</li>
+<li>直接原地清除的话会产生大量不连续的内存碎片，如果内存碎片太多，程序运行也需要分配较大对象的话，可能会出现无法找到足够的连续内存而提前出发GC</li>
+</ul>
+<h4 id="标记-复制算法"><a href="#标记-复制算法" class="headerlink" title="标记-复制算法"></a>标记-复制算法</h4><p>为了解决标记-清除算法面对大量可回收对象时执行效率低的问题，有人提出了<strong>半区复制</strong>算法，将可用内存划为大小相等的两块，当一块内存用完时，将存活的对象复制到另一块空间上，并将自身已经使用的内存空间一次性清理掉。如果内存中大量的对象都是存活的，那么这个算法将产生大量的复制开销，但如果大多数内存都是可回收的，那么算法每次复制的就是少量的存活对象，并且这种算法也不会出现空间碎片的情况。但这个算法还有点不足，内存缩小为原先的二分之一，空间浪费太大。</p>
+<p>因为这种算法适用大多数内存可回收的情况，所以很多商用JVM用这个算法来回收新生代，根据新生代朝生夕灭的特点，有人对这个算法做了改进，弥补了空间浪费这个缺点，被称为<strong>Appel式回收</strong>。</p>
+<p>Appel式回收的具体做法是将新生代划为一块较大的Eden区，两块较小的survivor区，内存大小比例是8:1:1，每次分配内存<strong>只在Eden区和一块survivor区上进行</strong>，发生垃圾收集时，将Eden区和survivor区上的存活对象复制到另一块survivor区上，然后对Eden区和已用的survivor区清理内存，这样的话，每次新生代的空间利用率可以达到90%，假如存活对象太多，一块survivor区不足以承载怎么办呢？Appel式回收提供了一个<strong>逃生门</strong>的设计，如果survivor区空间不够，就会依赖别的内存区域（多数是老年代）进行内存担保，借一块内存。</p>
+<h4 id="标记-整理算法"><a href="#标记-整理算法" class="headerlink" title="标记-整理算法"></a>标记-整理算法</h4><p>这种算法是针对老年代的特点提出的，其标记过程仍与“标记-清除”算法一样，但后续步骤不是对对象进行清理，而是将所有存活对象都向内存空间一端移动，然后直接清除掉边界外的内存。因为老年代中存活的对象很多，所以移动对象并更新对象引用是一个极为负重的操作，并且对象的移动操作必须要<strong>全程暂停用户应用线程</strong>才能进行，这无疑是增加延迟的。但如果和标记-清除算法一样不考虑移动整理存活对象的话，空间碎片化问题只能依赖更为复杂的内存分配器/内存访问器解决（比如像计算机硬盘存储大文件那样），两者均有利弊，那到底是整理内存还是不整理呢？从整个程序的吞吐量来看，因为内存分配和访问相比于垃圾收集频率要大得多，所以权衡利弊，应该用垃圾收集时的短暂延迟换取内存分配访问所耗费的时间复杂度。</p>
+<p>另外，也可以两者兼顾，让虚拟机平时多数时间采用标记-清除算法，当内存碎片化程度高于一定阈值时，再采用标记-整理算法收集一次，换取规整的内存空间。</p>
 ]]></content>
       <categories>
         <category>Java</category>
@@ -729,6 +729,80 @@ MAX_I=2^{bit-width}-1=255</script></li>
       </tags>
   </entry>
   <entry>
+    <title>关于C和Go的指针问题</title>
+    <url>/2020/05/03/%E5%85%B3%E4%BA%8EC%E5%92%8CGo%E7%9A%84%E6%8C%87%E9%92%88%E9%97%AE%E9%A2%98/</url>
+    <content><![CDATA[<h2 id="指针的含义和相关运算符"><a href="#指针的含义和相关运算符" class="headerlink" title="指针的含义和相关运算符"></a>指针的含义和相关运算符</h2><p><strong>变量</strong>是存储值的地方，而<strong>指针</strong>的值就是<strong>变量的地址</strong>。不是所有值都有地址，但是所有变量都有地址。通过使用指针，就可以在无需知道变量名字的情况下，<strong>间接</strong>读取/更新变量的值。</p>
+<p>在C语言和Go中，有两个特别重要又非常容易搞混的相关运算符，一个是&amp;，一个是*</p>
+<p>取址运算符&amp;</p>
+<ul>
+<li>格式：&amp;变量名</li>
+<li>含义：取出存放变量的地址</li>
+</ul>
+<p>间接运算符*</p>
+<ul>
+<li>格式：*指针名</li>
+<li>含义：取出存放在此地址中的值</li>
+</ul>
+<p>举个例子：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line">x := <span class="number">1</span></span><br><span class="line">p := &amp;x <span class="comment">// p是整形指针，指向x</span></span><br><span class="line">fmt.Println(*p) <span class="comment">// "1"</span></span><br><span class="line">*p = <span class="number">2</span> <span class="comment">// 等价于 x = 2</span></span><br><span class="line">fmt.Println(x) <span class="comment">// 结果 "2"</span></span><br></pre></td></tr></table></figure><br>在这里，C/C++和Go有一点差异，C/C++是可以对指针变量进行运算的，而Go是不支持这种操作的。例如：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="keyword">int</span> a = <span class="number">10</span>, *pa = &amp;a;</span><br><span class="line">    <span class="keyword">char</span> c = <span class="string">'@'</span>, *pc = &amp;c;</span><br><span class="line">    pa++; <span class="comment">// 地址值+4，因为int占4个字节</span></span><br><span class="line">    pc++; <span class="comment">// 地址值+1，因为char占一个字节</span></span><br><span class="line">&#125;</span><br><span class="line">其实，也正是因为C++的指针计算功能过于强大，导致在C++中支持GC变成一个很困难的工作，假如C++支持垃圾收集，下面的代码在运行时将会变成一个严峻的考验：</span><br><span class="line">```c++</span><br><span class="line"><span class="keyword">int</span>* p = <span class="keyword">new</span> <span class="keyword">int</span>;</span><br><span class="line">p += <span class="number">10</span>; <span class="comment">// 指针发生偏移，因此那块内存不再被引用</span></span><br><span class="line"><span class="comment">// 这里可能发生针对那块内存的垃圾收集</span></span><br><span class="line">p -= <span class="number">10</span>; <span class="comment">// 又偏移回原来位置</span></span><br><span class="line">*p = <span class="number">2</span>; <span class="comment">// 如果有垃圾收集，这里就无法保证正常运行</span></span><br></pre></td></tr></table></figure><br><figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">## 关于空指针</span><br><span class="line">在Go语言里，指针类型的零值是nil，相当于C语言里的NULL和C++11里的nullptr，说到这里，不妨顺带谈一谈C&#x2F;C++里的空指针。</span><br><span class="line">在C语言里，我们使用NULL来表示空指针，如下：</span><br><span class="line">&#96;&#96;&#96;c</span><br><span class="line">int *i &#x3D; NULL;</span><br><span class="line">foo_t *f &#x3D; NULL;</span><br></pre></td></tr></table></figure><br>其实在C语言中，NULL通常被定义为如下：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> NULL ((void *)0)</span></span><br></pre></td></tr></table></figure><br>也就是说，C语言里的NULL是一个void*类型的指针，然后将void    *赋值给int*和foo_t*类型指针时，隐式转换成了相应类型（注意：GO无隐式转换）。而如果换一个C++编译器来编译这是要出错的，因为在C++里，void*是不能隐式转换成其他类型指针的，所以通常情况下，编译器头文件会这样定义NULL：<br><figure class="highlight c++"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">ifdef</span> __cplusplus</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> NULL 0</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">else</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> NULL ((void *)0)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br></pre></td></tr></table></figure><br>也就是说，假如是C++编译环境，就将NULL定义为0，这就带来了一个问题，“<strong>二义性</strong>”，代码如下：<br><figure class="highlight c++"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">test</span><span class="params">(<span class="keyword">void</span>* p)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="built_in">cout</span> &lt;&lt; <span class="string">"pointer"</span> &lt;&lt; <span class="built_in">endl</span>;</span><br><span class="line">&#125;</span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">test</span><span class="params">(<span class="keyword">int</span> num)</span> </span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="built_in">cout</span> &lt;&lt; <span class="string">"number"</span> &lt;&lt; <span class="built_in">endl</span>;</span><br><span class="line">&#125;</span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    test(<span class="literal">NULL</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>编译会报错，为什么呢，因为NULL=0，test(NULL)可以匹配上面两个函数，所以有二义性。解决的方法，一是尽量用0代替NULL，这样写的时候自己就会发现问题，二就是C++11带来的解决方案<code>nullptr</code>，例如上面的代码，改成<code>test(nullptr)</code>则不会有问题。</p>
+<h2 id="Go中指针与函数-方法结合"><a href="#Go中指针与函数-方法结合" class="headerlink" title="Go中指针与函数/方法结合"></a>Go中指针与函数/方法结合</h2><p>Go语言中没有类这一概念，但是可以给结构体定义方法。</p>
+<p>在Go中，方法是一种带有<strong>接收者</strong>参数的特殊的函数。方法接收者在它的参数列表内，位于func关键字和方法名之间，例如下面这个代码，Abs方法拥有一个类型为Vertex的接收者：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(v Vertex)</span> <span class="title">Abs</span><span class="params">()</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> math.Sqrt(v.X*v.X + v.Y*v.Y)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>注意：接收者的类型定义和方法声明必须在同一包内，不能以其他包里定义的类型为接收者声明方法，比如下面这个就是非法的：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(f <span class="keyword">int</span>)</span> <span class="title">Abs</span><span class="params">()</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">if</span> f &lt; <span class="number">0</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="keyword">float64</span>(-f)</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> <span class="keyword">float64</span>(f)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>方法接收者可以是<strong>值</strong>，也可以是<strong>指针</strong>。当指针作为接收者的时候，该方法就可以修改指针指向的值。当值作为接收者的时候，方法会对<strong>原始值的副本</strong>进行操作而不修改原始值，取副本是需要每次调用方法的时候进行复制的，如果值的类型是大型结构体，那么这样做的效率比较低。由是观之，使用指针作为接收者有<strong>两点好处</strong>：</p>
+<ul>
+<li>方法能够修改其接收者指向的值</li>
+<li>避免在每次调用方法时复制该值，较为高效</li>
+</ul>
+<p><strong>最后</strong>，关于指针和方法在使用上还有一点要注意的。</p>
+<ul>
+<li>参数是指针的函数必须接受一个指针<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">ScaleFunc</span><span class="params">(v *Vertex, f <span class="keyword">float64</span>)</span></span> &#123;</span><br><span class="line">	v.X = v.X * f</span><br><span class="line">	v.Y = v.Y * f</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">ScaleFunc(v, <span class="number">5</span>)  <span class="comment">// 编译错误！</span></span><br><span class="line">ScaleFunc(&amp;v, <span class="number">5</span>) <span class="comment">// OK</span></span><br></pre></td></tr></table></figure></li>
+<li>以指针为接收者的方法被调用时，接收者<strong>既能为值也能为指针</strong>，此时用值用指针<strong>效果一样</strong><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(v *Vertex)</span> <span class="title">Scale</span><span class="params">(f <span class="keyword">float64</span>)</span></span> &#123;</span><br><span class="line">	v.X = v.X * f</span><br><span class="line">	v.Y = v.Y * f</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">v.Scale(<span class="number">5</span>)  <span class="comment">// OK，v改变，因为Go会将语句 v.Scale(5) 解释为 (&amp;v).Scale(5)</span></span><br><span class="line">p := &amp;v</span><br><span class="line">p.Scale(<span class="number">10</span>) <span class="comment">// OK，v改变</span></span><br></pre></td></tr></table></figure></li>
+<li>参数是值的函数必须接受一个值<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">AbsFunc</span><span class="params">(v Vertex)</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> math.Sqrt(v.X*v.X + v.Y*v.Y)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">fmt.Println(AbsFunc(v))  <span class="comment">// OK</span></span><br><span class="line">fmt.Println(AbsFunc(&amp;v)) <span class="comment">// 编译错误</span></span><br></pre></td></tr></table></figure></li>
+<li>以值为接收者的方法被调用时，接收者既能为值又能为指针，此时用值用指针<strong>效果一样</strong><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(v Vertex)</span> <span class="title">Abs</span><span class="params">()</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> math.Sqrt(v.X*v.X + v.Y*v.Y)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">fmt.Println(v.Abs()) <span class="comment">// OK</span></span><br><span class="line">p := &amp;v</span><br><span class="line">fmt.Println(p.Abs()) <span class="comment">// OK，这种情况下，方法调用 p.Abs() 会被解释为 (*p).Abs()</span></span><br></pre></td></tr></table></figure>
+</li>
+</ul>
+]]></content>
+      <categories>
+        <category>Go语言</category>
+      </categories>
+      <tags>
+        <tag>C语言</tag>
+        <tag>指针</tag>
+        <tag>golang</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>关于Go的异常处理</title>
+    <url>/2020/05/25/%E5%85%B3%E4%BA%8EGo%E7%9A%84%E5%BC%82%E5%B8%B8%E5%A4%84%E7%90%86/</url>
+    <content><![CDATA[<h2 id="引子"><a href="#引子" class="headerlink" title="引子"></a>引子</h2><p>在Java中，我们可以通过<code>throw</code>、<code>try{}catch{}finally{}</code>进行方便的异常处理，在C++中稍微复杂一些，没有<code>finally</code>语法，因此在遇到程序发生异常但需要关闭资源的时候，在C++中通常两种做法，第一种也是最常用的一种是使用RAII，即<code>Resource Aquisition Is Initialization</code>就是将资源封装成一个类，将资源的初始化封装在构造函数里，释放封装在析构函数里。要在局部使用资源的时候，就实例化一个local object。在抛出异常的时候，由于local object脱离了作用域，自动调用析构函数，这样就保证资源被释放。例如：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">   <span class="function"><span class="built_in">File</span> <span class="title">f</span><span class="params">(<span class="string">"xxx.ttt"</span>)</span></span>;</span><br><span class="line">    <span class="comment">//other file operation</span></span><br><span class="line">&#125;<span class="comment">//File pointer is released here</span></span><br><span class="line"><span class="keyword">catch</span> &#123;</span><br><span class="line">    <span class="comment">//exception process</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>另一种是沿用的C语言对于异常的处理方法：使用goto语句，将需要释放的资源变量都声明在函数开头部分，并在函数末尾统一释放资源，当函数需要退出时，使用goto语句跳转到指定位置完成资源清理工作，而不调用return直接返回：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span>&#123;</span><br><span class="line">    <span class="keyword">int</span> a = <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">int</span> b = <span class="number">0</span>;</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"请输入两个值:\n"</span>);</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"a = "</span>);</span><br><span class="line">    <span class="built_in">scanf</span>(<span class="string">"%d"</span>,&amp;a);</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"b = "</span>);</span><br><span class="line">    <span class="built_in">scanf</span>(<span class="string">"%d"</span>,&amp;b);</span><br><span class="line">    <span class="keyword">if</span>(b==<span class="number">0</span>)&#123;</span><br><span class="line">        <span class="keyword">goto</span> Error;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"a/b = %d\n"</span>,a/b);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">Error:</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"除数不能为0,程序异常退出!\n"</span>);</span><br><span class="line">    <span class="built_in">exit</span>(<span class="number">-1</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>Java处理异常方便，但是它将异常与控制结构混在一起会很容易使得代码变得混乱，开发者也容易滥用异常，对性能会造成影响，代码也不符合Go“简洁优雅”的设计理念；C/C++处理异常需要开发者遵守一套编码规范，如果不遵守的话，维护就会成为很大的问题，Go站在前人肩膀上看问题，提出了一套新的解决方案。</p>
+<h2 id="defer"><a href="#defer" class="headerlink" title="defer"></a>defer</h2><p>defer就相当于finally，defer的特性是，不管会不会发生异常，在函数返回之前，先调用defer函数，如果有多个defer语句，按照先进后出的方式进行执行，需要注意的是，defer语句中的变量，在defer声明时就决定了。</p>
+<p>例如使用defer时的一个坑：</p>
+<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	a := <span class="number">1</span></span><br><span class="line">	<span class="keyword">defer</span> fmt.Print(a) <span class="comment">// 因为在defer声明的时候，变量已经确定，所以还是输出1</span></span><br><span class="line">	a++</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>上面我们说到，defer会在函数返回之前被调用，但这并不意味着defer是在return之前被执行，是这样吗？看下面的例子：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="keyword">package</span> main</span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> <span class="string">"fmt"</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">test</span><span class="params">()</span> <span class="params">(res <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">	res = <span class="number">1</span></span><br><span class="line">	<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		res++</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	fmt.Print(test()) <span class="comment">// output: 1</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>这样的原因是，<strong>return不是原子性的</strong>，它包含的过程如下：</p>
+<ol>
+<li>给返回值赋值；</li>
+<li>调用RET返回指令并传入返回值，而RET则会检查defer是否存在，若存在就先逆序插播defer语句，最后RET携带返回值退出函数。</li>
+</ol>
+<p>在这个例子中的话，<code>res = 1 -&gt; res = 0 -&gt; res++</code>，所以res返回值最终是1</p>
+<h2 id="panic和recover"><a href="#panic和recover" class="headerlink" title="panic和recover"></a>panic和recover</h2><p>panic，恐慌，也就是抛出异常；</p>
+<p>recover，恢复，也就是从异常中恢复状态；</p>
+<p>在go里，panic和recover是抛异常和捕获异常的解决方案，panic相当于throw Exception，recover和defer结合起来相当于try…catch…</p>
+<p>先看一个手动引起异常的例子：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	a := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>&#125;</span><br><span class="line">	<span class="built_in">panic</span>(<span class="string">"触发异常"</span>)</span><br><span class="line">	fmt.Print(a[<span class="number">2</span>])</span><br><span class="line">&#125;</span><br><span class="line">-----output-----</span><br><span class="line"><span class="built_in">panic</span>: 触发异常</span><br></pre></td></tr></table></figure><br>panic是golang的内建函数，panic会中断函数F的正常执行流程, 从F函数中跳出来, 跳回到F函数的调用者. 调用者会继续向上跳出, 直到当前goroutine返回，在这个控制器传播过程中，panic详情会积累和完善，并在程序终止之前打印出来。在跳出的过程中, 进程会保持这个函数栈. 当goroutine退出时, 程序会crash。</p>
+<p>要注意的是, F函数中的defered函数会正常执行, 按照上面defer的规则。</p>
+<p>同时引起panic除了我们主动调用panic之外, 其他的任何运行时错误, 例如数组越界都会造成panic，比如：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	a := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>&#125;</span><br><span class="line">	fmt.Print(a[<span class="number">3</span>])</span><br><span class="line">&#125;</span><br><span class="line">-----output-----</span><br><span class="line"><span class="built_in">panic</span>: runtime error: index out of <span class="keyword">range</span> [<span class="number">3</span>] with length <span class="number">3</span></span><br></pre></td></tr></table></figure><br>recover也是golang的一个内建函数， 其实就是try catch。</p>
+<p>不过需要注意的是：</p>
+<ul>
+<li>recover如果想起作用的话， 必须在defered函数中使用。</li>
+<li>在正常函数执行过程中，调用recover没有任何作用, 他会返回nil。如这样：fmt.Println(recover()) 。（当然了，没捕获到异常肯定是nil了==）</li>
+<li>如果当前的goroutine panic了，那么recover将会捕获这个panic的值，并且<strong>让程序正常执行下去。不会让程序crash。</strong><br>看一个正常的捕获异常的例子：<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">    <span class="keyword">if</span> r := <span class="built_in">recover</span>(); r != <span class="literal">nil</span> &#123;</span><br><span class="line">        log.Printf(<span class="string">"Runtime error caught: %v"</span>, r)</span><br><span class="line">    &#125;</span><br><span class="line">&#125;()</span><br><span class="line">foo()</span><br></pre></td></tr></table></figure>
+无论foo()是否触发了错误处理流程，defer函数都会在函数退出时得到执行，如果没抛出异常，那么r就是nil，如果抛出了异常，recover就能捕获它、处理它。</li>
+</ul>
+]]></content>
+      <categories>
+        <category>Go语言</category>
+      </categories>
+      <tags>
+        <tag>golang</tag>
+      </tags>
+  </entry>
+  <entry>
     <title>关于客户端自动化测试的思考和经验总结</title>
     <url>/2021/01/22/%E5%85%B3%E4%BA%8E%E5%AE%A2%E6%88%B7%E7%AB%AF%E8%87%AA%E5%8A%A8%E5%8C%96%E6%B5%8B%E8%AF%95%E7%9A%84%E6%80%9D%E8%80%83%E5%92%8C%E7%BB%8F%E9%AA%8C%E6%80%BB%E7%BB%93/</url>
     <content><![CDATA[<p>2020年的1月15号，我入职了百度，成了一名测试开发实习生，到现在为止，也已经有整整一年的时间了。</p>
@@ -773,61 +847,6 @@ MAX_I=2^{bit-width}-1=255</script></li>
       </tags>
   </entry>
   <entry>
-    <title>关于C和Go的指针问题</title>
-    <url>/2020/05/03/%E5%85%B3%E4%BA%8EC%E5%92%8CGo%E7%9A%84%E6%8C%87%E9%92%88%E9%97%AE%E9%A2%98/</url>
-    <content><![CDATA[<h2 id="指针的含义和相关运算符"><a href="#指针的含义和相关运算符" class="headerlink" title="指针的含义和相关运算符"></a>指针的含义和相关运算符</h2><p><strong>变量</strong>是存储值的地方，而<strong>指针</strong>的值就是<strong>变量的地址</strong>。不是所有值都有地址，但是所有变量都有地址。通过使用指针，就可以在无需知道变量名字的情况下，<strong>间接</strong>读取/更新变量的值。</p>
-<p>在C语言和Go中，有两个特别重要又非常容易搞混的相关运算符，一个是&amp;，一个是*</p>
-<p>取址运算符&amp;</p>
-<ul>
-<li>格式：&amp;变量名</li>
-<li>含义：取出存放变量的地址</li>
-</ul>
-<p>间接运算符*</p>
-<ul>
-<li>格式：*指针名</li>
-<li>含义：取出存放在此地址中的值</li>
-</ul>
-<p>举个例子：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line">x := <span class="number">1</span></span><br><span class="line">p := &amp;x <span class="comment">// p是整形指针，指向x</span></span><br><span class="line">fmt.Println(*p) <span class="comment">// "1"</span></span><br><span class="line">*p = <span class="number">2</span> <span class="comment">// 等价于 x = 2</span></span><br><span class="line">fmt.Println(x) <span class="comment">// 结果 "2"</span></span><br></pre></td></tr></table></figure><br>在这里，C/C++和Go有一点差异，C/C++是可以对指针变量进行运算的，而Go是不支持这种操作的。例如：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="keyword">int</span> a = <span class="number">10</span>, *pa = &amp;a;</span><br><span class="line">    <span class="keyword">char</span> c = <span class="string">'@'</span>, *pc = &amp;c;</span><br><span class="line">    pa++; <span class="comment">// 地址值+4，因为int占4个字节</span></span><br><span class="line">    pc++; <span class="comment">// 地址值+1，因为char占一个字节</span></span><br><span class="line">&#125;</span><br><span class="line">其实，也正是因为C++的指针计算功能过于强大，导致在C++中支持GC变成一个很困难的工作，假如C++支持垃圾收集，下面的代码在运行时将会变成一个严峻的考验：</span><br><span class="line">```c++</span><br><span class="line"><span class="keyword">int</span>* p = <span class="keyword">new</span> <span class="keyword">int</span>;</span><br><span class="line">p += <span class="number">10</span>; <span class="comment">// 指针发生偏移，因此那块内存不再被引用</span></span><br><span class="line"><span class="comment">// 这里可能发生针对那块内存的垃圾收集</span></span><br><span class="line">p -= <span class="number">10</span>; <span class="comment">// 又偏移回原来位置</span></span><br><span class="line">*p = <span class="number">2</span>; <span class="comment">// 如果有垃圾收集，这里就无法保证正常运行</span></span><br></pre></td></tr></table></figure><br><figure class="highlight plain"><table><tr><td class="code"><pre><span class="line">## 关于空指针</span><br><span class="line">在Go语言里，指针类型的零值是nil，相当于C语言里的NULL和C++11里的nullptr，说到这里，不妨顺带谈一谈C&#x2F;C++里的空指针。</span><br><span class="line">在C语言里，我们使用NULL来表示空指针，如下：</span><br><span class="line">&#96;&#96;&#96;c</span><br><span class="line">int *i &#x3D; NULL;</span><br><span class="line">foo_t *f &#x3D; NULL;</span><br></pre></td></tr></table></figure><br>其实在C语言中，NULL通常被定义为如下：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> NULL ((void *)0)</span></span><br></pre></td></tr></table></figure><br>也就是说，C语言里的NULL是一个void*类型的指针，然后将void    *赋值给int*和foo_t*类型指针时，隐式转换成了相应类型（注意：GO无隐式转换）。而如果换一个C++编译器来编译这是要出错的，因为在C++里，void*是不能隐式转换成其他类型指针的，所以通常情况下，编译器头文件会这样定义NULL：<br><figure class="highlight c++"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">ifdef</span> __cplusplus</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> NULL 0</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">else</span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> NULL ((void *)0)</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">endif</span></span></span><br></pre></td></tr></table></figure><br>也就是说，假如是C++编译环境，就将NULL定义为0，这就带来了一个问题，“<strong>二义性</strong>”，代码如下：<br><figure class="highlight c++"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">test</span><span class="params">(<span class="keyword">void</span>* p)</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="built_in">cout</span> &lt;&lt; <span class="string">"pointer"</span> &lt;&lt; <span class="built_in">endl</span>;</span><br><span class="line">&#125;</span><br><span class="line"><span class="function"><span class="keyword">void</span> <span class="title">test</span><span class="params">(<span class="keyword">int</span> num)</span> </span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    <span class="built_in">cout</span> &lt;&lt; <span class="string">"number"</span> &lt;&lt; <span class="built_in">endl</span>;</span><br><span class="line">&#125;</span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span></span><br><span class="line"><span class="function"></span>&#123;</span><br><span class="line">    test(<span class="literal">NULL</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>编译会报错，为什么呢，因为NULL=0，test(NULL)可以匹配上面两个函数，所以有二义性。解决的方法，一是尽量用0代替NULL，这样写的时候自己就会发现问题，二就是C++11带来的解决方案<code>nullptr</code>，例如上面的代码，改成<code>test(nullptr)</code>则不会有问题。</p>
-<h2 id="Go中指针与函数-方法结合"><a href="#Go中指针与函数-方法结合" class="headerlink" title="Go中指针与函数/方法结合"></a>Go中指针与函数/方法结合</h2><p>Go语言中没有类这一概念，但是可以给结构体定义方法。</p>
-<p>在Go中，方法是一种带有<strong>接收者</strong>参数的特殊的函数。方法接收者在它的参数列表内，位于func关键字和方法名之间，例如下面这个代码，Abs方法拥有一个类型为Vertex的接收者：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(v Vertex)</span> <span class="title">Abs</span><span class="params">()</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> math.Sqrt(v.X*v.X + v.Y*v.Y)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>注意：接收者的类型定义和方法声明必须在同一包内，不能以其他包里定义的类型为接收者声明方法，比如下面这个就是非法的：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(f <span class="keyword">int</span>)</span> <span class="title">Abs</span><span class="params">()</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">if</span> f &lt; <span class="number">0</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> <span class="keyword">float64</span>(-f)</span><br><span class="line">	&#125;</span><br><span class="line">	<span class="keyword">return</span> <span class="keyword">float64</span>(f)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>方法接收者可以是<strong>值</strong>，也可以是<strong>指针</strong>。当指针作为接收者的时候，该方法就可以修改指针指向的值。当值作为接收者的时候，方法会对<strong>原始值的副本</strong>进行操作而不修改原始值，取副本是需要每次调用方法的时候进行复制的，如果值的类型是大型结构体，那么这样做的效率比较低。由是观之，使用指针作为接收者有<strong>两点好处</strong>：</p>
-<ul>
-<li>方法能够修改其接收者指向的值</li>
-<li>避免在每次调用方法时复制该值，较为高效</li>
-</ul>
-<p><strong>最后</strong>，关于指针和方法在使用上还有一点要注意的。</p>
-<ul>
-<li>参数是指针的函数必须接受一个指针<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">ScaleFunc</span><span class="params">(v *Vertex, f <span class="keyword">float64</span>)</span></span> &#123;</span><br><span class="line">	v.X = v.X * f</span><br><span class="line">	v.Y = v.Y * f</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">ScaleFunc(v, <span class="number">5</span>)  <span class="comment">// 编译错误！</span></span><br><span class="line">ScaleFunc(&amp;v, <span class="number">5</span>) <span class="comment">// OK</span></span><br></pre></td></tr></table></figure></li>
-<li>以指针为接收者的方法被调用时，接收者<strong>既能为值也能为指针</strong>，此时用值用指针<strong>效果一样</strong><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(v *Vertex)</span> <span class="title">Scale</span><span class="params">(f <span class="keyword">float64</span>)</span></span> &#123;</span><br><span class="line">	v.X = v.X * f</span><br><span class="line">	v.Y = v.Y * f</span><br><span class="line">&#125;</span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">v.Scale(<span class="number">5</span>)  <span class="comment">// OK，v改变，因为Go会将语句 v.Scale(5) 解释为 (&amp;v).Scale(5)</span></span><br><span class="line">p := &amp;v</span><br><span class="line">p.Scale(<span class="number">10</span>) <span class="comment">// OK，v改变</span></span><br></pre></td></tr></table></figure></li>
-<li>参数是值的函数必须接受一个值<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">AbsFunc</span><span class="params">(v Vertex)</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> math.Sqrt(v.X*v.X + v.Y*v.Y)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">fmt.Println(AbsFunc(v))  <span class="comment">// OK</span></span><br><span class="line">fmt.Println(AbsFunc(&amp;v)) <span class="comment">// 编译错误</span></span><br></pre></td></tr></table></figure></li>
-<li>以值为接收者的方法被调用时，接收者既能为值又能为指针，此时用值用指针<strong>效果一样</strong><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="params">(v Vertex)</span> <span class="title">Abs</span><span class="params">()</span> <span class="title">float64</span></span> &#123;</span><br><span class="line">	<span class="keyword">return</span> math.Sqrt(v.X*v.X + v.Y*v.Y)</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">var</span> v Vertex</span><br><span class="line">fmt.Println(v.Abs()) <span class="comment">// OK</span></span><br><span class="line">p := &amp;v</span><br><span class="line">fmt.Println(p.Abs()) <span class="comment">// OK，这种情况下，方法调用 p.Abs() 会被解释为 (*p).Abs()</span></span><br></pre></td></tr></table></figure>
-</li>
-</ul>
-]]></content>
-      <categories>
-        <category>Go语言</category>
-      </categories>
-      <tags>
-        <tag>C语言</tag>
-        <tag>指针</tag>
-        <tag>golang</tag>
-      </tags>
-  </entry>
-  <entry>
-    <title>函数、指针、闭包再探讨（待填坑）</title>
-    <url>/2020/05/03/%E5%87%BD%E6%95%B0%E3%80%81%E6%8C%87%E9%92%88%E3%80%81%E9%97%AD%E5%8C%85%E5%86%8D%E6%8E%A2%E8%AE%A8%EF%BC%88%E5%BE%85%E5%A1%AB%E5%9D%91%EF%BC%89/</url>
-    <content><![CDATA[<p>在之前的博客里分别探究了一下闭包和指针的概念，今天将函数、闭包和指针贯通起来，从C，Python，Java和Go这些不同编程语言的角度，深究一下这三者间的联系。</p>
-<h2 id="函数是什么"><a href="#函数是什么" class="headerlink" title="函数是什么"></a>函数是什么</h2><p>函数，是内存里一段可执行代码。</p>
-]]></content>
-      <categories>
-        <category>编程语言</category>
-      </categories>
-      <tags>
-        <tag>指针</tag>
-        <tag>闭包</tag>
-        <tag>函数</tag>
-      </tags>
-  </entry>
-  <entry>
     <title>关于闭包的理解</title>
     <url>/2020/05/02/%E5%85%B3%E4%BA%8E%E9%97%AD%E5%8C%85%E7%9A%84%E7%90%86%E8%A7%A3/</url>
     <content><![CDATA[<h2 id="什么是闭包"><a href="#什么是闭包" class="headerlink" title="什么是闭包"></a>什么是闭包</h2><p>在很多高级语言中，都有“闭包”这一概念，闭包（Closure）是词法闭包（Lexical Closure）的简称。官方一点的定义是，闭包是由<strong>函数</strong>和与其相关的<strong>引用环境</strong>组合而成的实体。</p>
@@ -857,6 +876,21 @@ MAX_I=2^{bit-width}-1=255</script></li>
       <tags>
         <tag>golang</tag>
         <tag>闭包</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>函数、指针、闭包再探讨（待填坑）</title>
+    <url>/2020/05/03/%E5%87%BD%E6%95%B0%E3%80%81%E6%8C%87%E9%92%88%E3%80%81%E9%97%AD%E5%8C%85%E5%86%8D%E6%8E%A2%E8%AE%A8%EF%BC%88%E5%BE%85%E5%A1%AB%E5%9D%91%EF%BC%89/</url>
+    <content><![CDATA[<p>在之前的博客里分别探究了一下闭包和指针的概念，今天将函数、闭包和指针贯通起来，从C，Python，Java和Go这些不同编程语言的角度，深究一下这三者间的联系。</p>
+<h2 id="函数是什么"><a href="#函数是什么" class="headerlink" title="函数是什么"></a>函数是什么</h2><p>函数，是内存里一段可执行代码。</p>
+]]></content>
+      <categories>
+        <category>编程语言</category>
+      </categories>
+      <tags>
+        <tag>指针</tag>
+        <tag>闭包</tag>
+        <tag>函数</tag>
       </tags>
   </entry>
   <entry>
@@ -921,40 +955,6 @@ MAX_I=2^{bit-width}-1=255</script></li>
       <tags>
         <tag>图像算法</tag>
         <tag>图像拼接</tag>
-      </tags>
-  </entry>
-  <entry>
-    <title>关于Go的异常处理</title>
-    <url>/2020/05/25/%E5%85%B3%E4%BA%8EGo%E7%9A%84%E5%BC%82%E5%B8%B8%E5%A4%84%E7%90%86/</url>
-    <content><![CDATA[<h2 id="引子"><a href="#引子" class="headerlink" title="引子"></a>引子</h2><p>在Java中，我们可以通过<code>throw</code>、<code>try{}catch{}finally{}</code>进行方便的异常处理，在C++中稍微复杂一些，没有<code>finally</code>语法，因此在遇到程序发生异常但需要关闭资源的时候，在C++中通常两种做法，第一种也是最常用的一种是使用RAII，即<code>Resource Aquisition Is Initialization</code>就是将资源封装成一个类，将资源的初始化封装在构造函数里，释放封装在析构函数里。要在局部使用资源的时候，就实例化一个local object。在抛出异常的时候，由于local object脱离了作用域，自动调用析构函数，这样就保证资源被释放。例如：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="keyword">try</span> &#123;</span><br><span class="line">   <span class="function"><span class="built_in">File</span> <span class="title">f</span><span class="params">(<span class="string">"xxx.ttt"</span>)</span></span>;</span><br><span class="line">    <span class="comment">//other file operation</span></span><br><span class="line">&#125;<span class="comment">//File pointer is released here</span></span><br><span class="line"><span class="keyword">catch</span> &#123;</span><br><span class="line">    <span class="comment">//exception process</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>另一种是沿用的C语言对于异常的处理方法：使用goto语句，将需要释放的资源变量都声明在函数开头部分，并在函数末尾统一释放资源，当函数需要退出时，使用goto语句跳转到指定位置完成资源清理工作，而不调用return直接返回：<br><figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span>&#123;</span><br><span class="line">    <span class="keyword">int</span> a = <span class="number">0</span>;</span><br><span class="line">    <span class="keyword">int</span> b = <span class="number">0</span>;</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"请输入两个值:\n"</span>);</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"a = "</span>);</span><br><span class="line">    <span class="built_in">scanf</span>(<span class="string">"%d"</span>,&amp;a);</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"b = "</span>);</span><br><span class="line">    <span class="built_in">scanf</span>(<span class="string">"%d"</span>,&amp;b);</span><br><span class="line">    <span class="keyword">if</span>(b==<span class="number">0</span>)&#123;</span><br><span class="line">        <span class="keyword">goto</span> Error;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"a/b = %d\n"</span>,a/b);</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">Error:</span><br><span class="line">    <span class="built_in">printf</span>(<span class="string">"除数不能为0,程序异常退出!\n"</span>);</span><br><span class="line">    <span class="built_in">exit</span>(<span class="number">-1</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>Java处理异常方便，但是它将异常与控制结构混在一起会很容易使得代码变得混乱，开发者也容易滥用异常，对性能会造成影响，代码也不符合Go“简洁优雅”的设计理念；C/C++处理异常需要开发者遵守一套编码规范，如果不遵守的话，维护就会成为很大的问题，Go站在前人肩膀上看问题，提出了一套新的解决方案。</p>
-<h2 id="defer"><a href="#defer" class="headerlink" title="defer"></a>defer</h2><p>defer就相当于finally，defer的特性是，不管会不会发生异常，在函数返回之前，先调用defer函数，如果有多个defer语句，按照先进后出的方式进行执行，需要注意的是，defer语句中的变量，在defer声明时就决定了。</p>
-<p>例如使用defer时的一个坑：</p>
-<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	a := <span class="number">1</span></span><br><span class="line">	<span class="keyword">defer</span> fmt.Print(a) <span class="comment">// 因为在defer声明的时候，变量已经确定，所以还是输出1</span></span><br><span class="line">	a++</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<p>上面我们说到，defer会在函数返回之前被调用，但这并不意味着defer是在return之前被执行，是这样吗？看下面的例子：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="keyword">package</span> main</span><br><span class="line"></span><br><span class="line"><span class="keyword">import</span> <span class="string">"fmt"</span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">test</span><span class="params">()</span> <span class="params">(res <span class="keyword">int</span>)</span></span> &#123;</span><br><span class="line">	res = <span class="number">1</span></span><br><span class="line">	<span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">		res++</span><br><span class="line">	&#125;()</span><br><span class="line">	<span class="keyword">return</span> <span class="number">0</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	fmt.Print(test()) <span class="comment">// output: 1</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>这样的原因是，<strong>return不是原子性的</strong>，它包含的过程如下：</p>
-<ol>
-<li>给返回值赋值；</li>
-<li>调用RET返回指令并传入返回值，而RET则会检查defer是否存在，若存在就先逆序插播defer语句，最后RET携带返回值退出函数。</li>
-</ol>
-<p>在这个例子中的话，<code>res = 1 -&gt; res = 0 -&gt; res++</code>，所以res返回值最终是1</p>
-<h2 id="panic和recover"><a href="#panic和recover" class="headerlink" title="panic和recover"></a>panic和recover</h2><p>panic，恐慌，也就是抛出异常；</p>
-<p>recover，恢复，也就是从异常中恢复状态；</p>
-<p>在go里，panic和recover是抛异常和捕获异常的解决方案，panic相当于throw Exception，recover和defer结合起来相当于try…catch…</p>
-<p>先看一个手动引起异常的例子：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	a := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>&#125;</span><br><span class="line">	<span class="built_in">panic</span>(<span class="string">"触发异常"</span>)</span><br><span class="line">	fmt.Print(a[<span class="number">2</span>])</span><br><span class="line">&#125;</span><br><span class="line">-----output-----</span><br><span class="line"><span class="built_in">panic</span>: 触发异常</span><br></pre></td></tr></table></figure><br>panic是golang的内建函数，panic会中断函数F的正常执行流程, 从F函数中跳出来, 跳回到F函数的调用者. 调用者会继续向上跳出, 直到当前goroutine返回，在这个控制器传播过程中，panic详情会积累和完善，并在程序终止之前打印出来。在跳出的过程中, 进程会保持这个函数栈. 当goroutine退出时, 程序会crash。</p>
-<p>要注意的是, F函数中的defered函数会正常执行, 按照上面defer的规则。</p>
-<p>同时引起panic除了我们主动调用panic之外, 其他的任何运行时错误, 例如数组越界都会造成panic，比如：<br><figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="function"><span class="keyword">func</span> <span class="title">main</span><span class="params">()</span></span> &#123;</span><br><span class="line">	a := []<span class="keyword">int</span>&#123;<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>&#125;</span><br><span class="line">	fmt.Print(a[<span class="number">3</span>])</span><br><span class="line">&#125;</span><br><span class="line">-----output-----</span><br><span class="line"><span class="built_in">panic</span>: runtime error: index out of <span class="keyword">range</span> [<span class="number">3</span>] with length <span class="number">3</span></span><br></pre></td></tr></table></figure><br>recover也是golang的一个内建函数， 其实就是try catch。</p>
-<p>不过需要注意的是：</p>
-<ul>
-<li>recover如果想起作用的话， 必须在defered函数中使用。</li>
-<li>在正常函数执行过程中，调用recover没有任何作用, 他会返回nil。如这样：fmt.Println(recover()) 。（当然了，没捕获到异常肯定是nil了==）</li>
-<li>如果当前的goroutine panic了，那么recover将会捕获这个panic的值，并且<strong>让程序正常执行下去。不会让程序crash。</strong><br>看一个正常的捕获异常的例子：<figure class="highlight go"><table><tr><td class="code"><pre><span class="line"><span class="keyword">defer</span> <span class="function"><span class="keyword">func</span><span class="params">()</span></span> &#123;</span><br><span class="line">    <span class="keyword">if</span> r := <span class="built_in">recover</span>(); r != <span class="literal">nil</span> &#123;</span><br><span class="line">        log.Printf(<span class="string">"Runtime error caught: %v"</span>, r)</span><br><span class="line">    &#125;</span><br><span class="line">&#125;()</span><br><span class="line">foo()</span><br></pre></td></tr></table></figure>
-无论foo()是否触发了错误处理流程，defer函数都会在函数退出时得到执行，如果没抛出异常，那么r就是nil，如果抛出了异常，recover就能捕获它、处理它。</li>
-</ul>
-]]></content>
-      <categories>
-        <category>Go语言</category>
-      </categories>
-      <tags>
-        <tag>golang</tag>
       </tags>
   </entry>
   <entry>
