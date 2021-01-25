@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+
+
+
+  
+
+
+<html class="theme-next pisces use-motion" lang="en">
+<head>
+  <meta charset="UTF-8"/>
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
+<meta name="theme-color" content="#222">
+
+
+
+
+
+
+
+
+
+<meta http-equiv="Cache-Control" content="no-transform" />
+<meta http-equiv="Cache-Control" content="no-siteapp" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+  
+  <link href="/lib/fancybox/source/jquery.fancybox.css?v=2.1.5" rel="stylesheet" type="text/css" />
+
+
+
+
+
+
+
+<link href="/lib/font-awesome/css/font-awesome.min.css?v=4.6.2" rel="stylesheet" type="text/css" />
+
+<link href="/css/main.css?v=5.1.4" rel="stylesheet" type="text/css" />
+
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png?v=5.1.4">
+
+
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32x32-next.png?v=5.1.4">
+
+
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16x16-next.png?v=5.1.4">
+
+
+  <link rel="mask-icon" href="/images/logo.svg?v=5.1.4" color="#222">
+
+
+
+
+
+  <meta name="keywords" content="Java,JVM," />
+
+
+
+
+
+
+
+
+
+
+<meta name="description" content="常见对象存活判定算法引用计数法具体方法是，在对象中添加一个引用计数器，每当有一个地方引用它时，计数器+1，当引用失效时，计数器-1，如果计数器为零，就说明没有地方在引用它。这个方法看似原理很简单，效率也高，但其实需要很多额外的考虑才能保证这个判定过程正确执行，比如单纯的引用计数很难解决对象间的循环引用的问题，举个例子：12345678910111213141516public class Refe">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Java虚拟机学习笔记二：GC算法初探">
+<meta property="og:url" content="http://yoursite.com/2020/05/31/Java%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0%E4%BA%8C%EF%BC%9AGC%E7%AE%97%E6%B3%95%E5%88%9D%E6%8E%A2/index.html">
+<meta property="og:site_name" content="Bodhisatan&#39;s blog">
+<meta property="og:description" content="常见对象存活判定算法引用计数法具体方法是，在对象中添加一个引用计数器，每当有一个地方引用它时，计数器+1，当引用失效时，计数器-1，如果计数器为零，就说明没有地方在引用它。这个方法看似原理很简单，效率也高，但其实需要很多额外的考虑才能保证这个判定过程正确执行，比如单纯的引用计数很难解决对象间的循环引用的问题，举个例子：12345678910111213141516public class Refe">
+<meta property="og:locale" content="en_US">
+<meta property="article:published_time" content="2020-05-31T08:07:20.000Z">
+<meta property="article:modified_time" content="2020-05-31T15:55:42.363Z">
+<meta property="article:author" content="Yao Xianjie">
+<meta property="article:tag" content="Java">
+<meta property="article:tag" content="JVM">
+<meta name="twitter:card" content="summary">
+
+
+
+<script type="text/javascript" id="hexo.configurations">
+  var NexT = window.NexT || {};
+  var CONFIG = {
+    root: '/',
+    scheme: 'Pisces',
+    version: '5.1.4',
+    sidebar: {"position":"left","display":"post","offset":12,"b2t":false,"scrollpercent":false,"onmobile":false},
+    fancybox: true,
+    tabs: true,
+    motion: {"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}},
+    duoshuo: {
+      userId: '0',
+      author: 'Author'
+    },
+    algolia: {
+      applicationID: '',
+      apiKey: '',
+      indexName: '',
+      hits: {"per_page":10},
+      labels: {"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}
+    }
+  };
+</script>
+
+
+
+  <link rel="canonical" href="http://yoursite.com/2020/05/31/Java虚拟机学习笔记二：GC算法初探/"/>
+
+
+
+
+
+  <title>Java虚拟机学习笔记二：GC算法初探 | Bodhisatan's blog</title>
+  
+
+
+
+
+
+
+
+
+<meta name="generator" content="Hexo 4.2.0"></head>
+
+<body itemscope itemtype="http://schema.org/WebPage" lang="en">
+
+  
+  
+    
+  
+
+  <div class="container sidebar-position-left page-post-detail">
+    <div class="headband"></div>
+
+    <header id="header" class="header" itemscope itemtype="http://schema.org/WPHeader">
+      <div class="header-inner"><div class="site-brand-wrapper">
+  <div class="site-meta ">
+    
+
+    <div class="custom-logo-site-title">
+      <a href="/"  class="brand" rel="start">
+        <span class="logo-line-before"><i></i></span>
+        <span class="site-title">Bodhisatan's blog</span>
+        <span class="logo-line-after"><i></i></span>
+      </a>
+    </div>
+      
+        <p class="site-subtitle"></p>
+      
+  </div>
+
+  <div class="site-nav-toggle">
+    <button>
+      <span class="btn-bar"></span>
+      <span class="btn-bar"></span>
+      <span class="btn-bar"></span>
+    </button>
+  </div>
+</div>
+
+<nav class="site-nav">
+  
+
+  
+    <ul id="menu" class="menu">
+      
+        
+        <li class="menu-item menu-item-home">
+          <a href="/" rel="section">
+            
+              <i class="menu-item-icon fa fa-fw fa-home"></i> <br />
+            
+            Home
+          </a>
+        </li>
+      
+        
+        <li class="menu-item menu-item-archives">
+          <a href="/archives" rel="section">
+            
+              <i class="menu-item-icon fa fa-fw fa-question-circle"></i> <br />
+            
+            Archives
+          </a>
+        </li>
+      
+        
+        <li class="menu-item menu-item-tags">
+          <a href="/tags/" rel="section">
+            
+              <i class="menu-item-icon fa fa-fw fa-tags"></i> <br />
+            
+            Tags
+          </a>
+        </li>
+      
+        
+        <li class="menu-item menu-item-categories">
+          <a href="/categories/" rel="section">
+            
+              <i class="menu-item-icon fa fa-fw fa-th"></i> <br />
+            
+            Categories
+          </a>
+        </li>
+      
+
+      
+        <li class="menu-item menu-item-search">
+          
+            <a href="javascript:;" class="popup-trigger">
+          
+            
+              <i class="menu-item-icon fa fa-search fa-fw"></i> <br />
+            
+            Search
+          </a>
+        </li>
+      
+    </ul>
+  
+
+  
+    <div class="site-search">
+      
+  <div class="popup search-popup local-search-popup">
+  <div class="local-search-header clearfix">
+    <span class="search-icon">
+      <i class="fa fa-search"></i>
+    </span>
+    <span class="popup-btn-close">
+      <i class="fa fa-times-circle"></i>
+    </span>
+    <div class="local-search-input-wrapper">
+      <input autocomplete="off"
+             placeholder="Searching..." spellcheck="false"
+             type="text" id="local-search-input">
+    </div>
+  </div>
+  <div id="local-search-result"></div>
+</div>
+
+
+
+    </div>
+  
+</nav>
+
+
+
+ </div>
+    </header>
+
+    <main id="main" class="main">
+      <div class="main-inner">
+        <div class="content-wrap">
+          <div id="content" class="content">
+            
+
+  <div id="posts" class="posts-expand">
+    
+
+  
+
+  
+  
+  
+
+  <article class="post post-type-normal" itemscope itemtype="http://schema.org/Article">
+  
+  
+  
+  <div class="post-block">
+    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2020/05/31/Java%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0%E4%BA%8C%EF%BC%9AGC%E7%AE%97%E6%B3%95%E5%88%9D%E6%8E%A2/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="name" content="Yao Xianjie">
+      <meta itemprop="description" content="">
+      <meta itemprop="image" content="/images/avatar.gif">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="Bodhisatan's blog">
+    </span>
+
+    
+      <header class="post-header">
+
+        
+        
+          <h1 class="post-title" itemprop="name headline">Java虚拟机学习笔记二：GC算法初探</h1>
+        
+
+        <div class="post-meta">
+          <span class="post-time">
+            
+              <span class="post-meta-item-icon">
+                <i class="fa fa-calendar-o"></i>
+              </span>
+              
+                <span class="post-meta-item-text">Posted on</span>
+              
+              <time title="Post created" itemprop="dateCreated datePublished" datetime="2020-05-31T16:07:20+08:00">
+                2020-05-31
+              </time>
+            
+
+            
+
+            
+          </span>
+
+          
+            <span class="post-category" >
+            
+              <span class="post-meta-divider">|</span>
+            
+              <span class="post-meta-item-icon">
+                <i class="fa fa-folder-o"></i>
+              </span>
+              
+                <span class="post-meta-item-text">In</span>
+              
+              
+                <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+                  <a href="/categories/Java/" itemprop="url" rel="index">
+                    <span itemprop="name">Java</span>
+                  </a>
+                </span>
+
+                
+                
+              
+            </span>
+          
+
+          
+            
+          
+
+          
+          
+
+          
+
+          
+            <div class="post-wordcount">
+              
+                
+                <span class="post-meta-item-icon">
+                  <i class="fa fa-file-word-o"></i>
+                </span>
+                
+                  <span class="post-meta-item-text">Words count in article&#58;</span>
+                
+                <span title="Words count in article">
+                  3.3k 字
+                </span>
+              
+
+              
+                <span class="post-meta-divider">|</span>
+              
+
+              
+                <span class="post-meta-item-icon">
+                  <i class="fa fa-clock-o"></i>
+                </span>
+                
+                  <span class="post-meta-item-text">Reading time &asymp;</span>
+                
+                <span title="Reading time">
+                  11 分钟
+                </span>
+              
+            </div>
+          
+
+          
+
+        </div>
+      </header>
+    
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody">
+
+      
+      
+
+      
+        <h2 id="常见对象存活判定算法"><a href="#常见对象存活判定算法" class="headerlink" title="常见对象存活判定算法"></a>常见对象存活判定算法</h2><h3 id="引用计数法"><a href="#引用计数法" class="headerlink" title="引用计数法"></a>引用计数法</h3><p>具体方法是，在对象中添加一个引用计数器，每当有一个地方引用它时，计数器+1，当引用失效时，计数器-1，如果计数器为零，就说明没有地方在引用它。这个方法看似原理很简单，效率也高，但其实需要很多额外的考虑才能保证这个判定过程正确执行，比如单纯的引用计数很难解决对象间的循环引用的问题，举个例子：<br><figure class="highlight java"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">public</span> <span class="class"><span class="keyword">class</span> <span class="title">ReferenceCountingGC</span> </span>&#123;</span><br><span class="line">	</span><br><span class="line">	<span class="keyword">private</span> Object instance=<span class="keyword">null</span>;</span><br><span class="line">	<span class="keyword">private</span> <span class="keyword">static</span> <span class="keyword">final</span> <span class="keyword">int</span> _1MB=<span class="number">1024</span>*<span class="number">1024</span>;</span><br><span class="line">	<span class="keyword">private</span> <span class="keyword">byte</span>[] bigSize=<span class="keyword">new</span> <span class="keyword">byte</span>[<span class="number">1024</span>*<span class="number">1024</span>];<span class="comment">//1MB的堆空间</span></span><br><span class="line"> </span><br><span class="line">	<span class="function"><span class="keyword">public</span> <span class="keyword">static</span> <span class="keyword">void</span> <span class="title">main</span><span class="params">(String[] args)</span> </span>&#123;</span><br><span class="line">		ReferenceCountingGC objA=<span class="keyword">new</span> ReferenceCountingGC(); <span class="comment">// step1</span></span><br><span class="line">		ReferenceCountingGC objB=<span class="keyword">new</span> ReferenceCountingGC(); <span class="comment">// step2</span></span><br><span class="line">		objA.instance=objB; <span class="comment">// step3</span></span><br><span class="line">		objB.instance=objA; <span class="comment">// step4</span></span><br><span class="line">		objA=<span class="keyword">null</span>; <span class="comment">// step5</span></span><br><span class="line">		objB=<span class="keyword">null</span>; <span class="comment">// step6</span></span><br><span class="line">	&#125;</span><br><span class="line"> </span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure><br>分析一下这段代码，首先经过了step1和step2之后，虚拟机栈的局部变量表里有两个reference类型变量，objA和objB，他们分别指向堆上的两个ReferenceCountingGC对象实例，我们用实例A和实例B表示，实例A因为objA引用它，所以计数器加1，cntA = 1，同理cntB = 1；step3阶段，实例B被实例A的instance成员引用，cntB = 2，同理step4阶段cntA = 2。step5阶段，栈帧中的objA不再指向实例A，cntA = 1，step6阶段，栈帧中的objB不再指向实例B，cntB = 1。到此，实例A和实例B的引用计数器均不为0，如果只是单纯的引用计数法，这便产生了<strong>内存泄漏</strong></p>
+<h3 id="可达性分析法"><a href="#可达性分析法" class="headerlink" title="可达性分析法"></a>可达性分析法</h3><p>可达性分析法就是通过一系列的<strong>GC Root</strong>根对象作为起始节点，用类似二叉树遍历的方法向下搜索，如果GC Root到某个对象<strong>不可达</strong>，这时的对象就是不可能再被引用的，会被回收掉。</p>
+<p>可作为GC Root的对象包含下面几种：</p>
+<ul>
+<li><strong>虚拟机栈本地变量表中引用的对象</strong></li>
+<li><strong>方法区中常量引用的对象、静态属性引用的变量</strong></li>
+<li>本地方法区中JNI引用的变量</li>
+<li>Java虚拟机内部的引用，比如异常对象<code>NullPointerException</code></li>
+<li>所有被同步锁（synchronized关键字）持有的对象</li>
+<li>反映Java虚拟机内部情况的JMXBean、JVMTI中注册的回调、本地代码的缓存等…</li>
+</ul>
+<p>除了这些固定的对象之外，根据垃圾收集的区域不同，还可以有其他对象临时加入，因为根据虚拟机自己的实现细节，某个区域里的对象完全有可能被其他区域对象所引用</p>
+<h2 id="对象的引用分类（强度依次递减）"><a href="#对象的引用分类（强度依次递减）" class="headerlink" title="对象的引用分类（强度依次递减）"></a>对象的引用分类（强度依次递减）</h2><ul>
+<li>强引用：例如<code>Object a = new Object()</code>只要强引用关系存在，对象就不会被回收</li>
+<li>软引用：还有用，但非必须的对象，这部分对象会在系统将要内存溢出前进行回收</li>
+<li>弱引用：一旦发起垃圾回收，就会回收弱引用的对象</li>
+<li>虚引用：“形同虚设”，一个对象是否有虚引用，完全不影响它的生命周期。虚引用与软引用和弱引用的一个区别在于：虚引用必须和引用队列（ReferenceQueue）联合使用。当垃圾回收器准备回收一个对象时，如果发现它还有虚引用，就会在回收对象的内存之前，把这个虚引用加入到与之关联的引用队列中。程序可以通过判断引用队列中是否已经加入了虚引用，来了解被引用的对象是否将要被垃圾回收。</li>
+</ul>
+<h2 id="finalize-方法"><a href="#finalize-方法" class="headerlink" title="finalize()方法"></a>finalize()方法</h2><p>要真正宣告一个对象的死亡，至少要经过两次标记过程：第一次是可达性分析后发现不可达，被第一次标记；第二次是一次筛选，筛选条件是此对象是否有必要执行<code>finalize()</code>方法，如果对象未覆盖<code>finalize()</code>方法，或者<code>finalize()</code>方法已经被对象调用过，那就没必要执行，假如被判定为有必要执行，那么该对象会被放在一个名为F-Queue的队列中，稍后由一条虚拟机自动建立的、<strong>低调度优先级</strong>的Finalize()线程执行队列中对象的finalize()方法。执行是指仅仅触发，并不会等待一个对象执行完，因为假如一个对象的finalize()方法运行缓慢，如果等待的话会影响其他对象的回收。</p>
+<p>finalize()有点类似C/C++的析构函数，这个语法当初就是为了迎合C/C++程序员而做的一项妥协，但这个语法不合适当成析构函数用，因为它运行代价高昂，不确定性大，无法保证各个对象的调用顺序，已经被官方声明为不推荐的语法。</p>
+<p>finalize()方法是对象最后的抢救机会，假如对象在此方法中又与GC Root建立了联系，那么这个对象实例就会逃过这次GC，但一个实例的finalize方法只会被执行一次，所以在下一次GC发起时，这个对象不会再因为finalize方法而再逃一次。</p>
+<h2 id="方法区的回收"><a href="#方法区的回收" class="headerlink" title="方法区的回收"></a>方法区的回收</h2><p>方法区的垃圾回收收益远不及堆区，所以一般不要求虚拟机在方法区中实现垃圾收集，但有些情况下，方法区也会有一些较大的内存压力，那么方法区如何垃圾回收呢？</p>
+<p>从上一篇博客我们知道，方法区主要有两部分数据，<strong>类型信息</strong>和<strong>常量池</strong>，常量池中常量的回收比较简单，类似于对象，但判断一个类型是否属于<strong>不再被使用的类</strong>条件就比较苛刻了，需要同时满足下面三个条件：</p>
+<ul>
+<li>该类所有实例已经被回收，堆中不存在该类或者任何派生类的实例</li>
+<li>加载该类的类加载器已经被回收</li>
+<li>该类对应的<code>java.lang.Class</code>对象没有在任何地方被引用，无法在任何地方通过反射获取这个类的方法</li>
+</ul>
+<p>如果同时满足了上述三个条件，那么该类型便<strong>允许被回收</strong>，而并不是像对象那样，<strong>必然被回收</strong></p>
+<h2 id="垃圾收集算法"><a href="#垃圾收集算法" class="headerlink" title="垃圾收集算法"></a>垃圾收集算法</h2><p>上文说，对象判活有两种算法，引用计数和可达性分析，从这两个算法出发，垃圾收集算法可以分为<strong>引用计数式垃圾收集</strong>和<strong>追踪式垃圾收集</strong>。主流的是追踪式垃圾收集。</p>
+<h3 id="分代收集理论"><a href="#分代收集理论" class="headerlink" title="分代收集理论"></a>分代收集理论</h3><p>在垃圾回收时，虚拟机要关注的对象体量是非常庞大的，假如每次都要遍历一边，无疑会造成很多性能上的损失，于是提出了分代收集理论，将Java堆划分出不同区域，然后将对象按照年龄（年龄即熬过垃圾收集过程的次数）分配到不同区域中，这个理论是建立在两个分代假说之上：</p>
+<ol>
+<li>弱分代假说：绝大多数对象都是朝生夕灭</li>
+<li>强分代假说：熬过越多次垃圾收集的对象越难消亡</li>
+</ol>
+<p>根据这两个假说，大部分虚拟机将Java堆划分成<strong>新生代</strong>和<strong>老年代</strong>，新生代中存放朝生夕灭的对象，每次垃圾回收时都有大批量对象死去，而每次回收后存活的少量对象，将晋升到老年代中存放，老年代对象因为很难消亡，所以只需很低的频次对这块区域进行回收即可，这样就比原先每次遍历整个堆效率提升了很多。</p>
+<p>但仔细思考一下，分代收集真的只是划分一下区域这么简单吗？这里其实存在一个问题，对象不是孤立的，而是存在跨代引用。假如现在要进行一次只针对新生代的收集（Minor GC），但新生代中的对象完全有可能被老年代中对象引用，这样的话，GC Root就得再加上老年代对象，来进行可达性分析，这种方案理论可行，但也会为内存增大很大负担，所以垃圾分代理论有了第三条经验法则：</p>
+<ol>
+<li>跨代引用假说：跨代引用相对于同代引用来说仅占极少数</li>
+</ol>
+<p>有了这条假说，我们就不必为了少量的跨代引用去扫描整个老年代，只需要在新生代上建立一个<strong>记忆集</strong>（Remember Set），这个结构作用是将老年代划分成若干小块，标示出哪一块会存在跨代引用，此后每次进行Minor GC时，只需将跨代引用的那一小块加入GC Root中，这个做法会增加一些运行时常数复杂度的开销，但相比于扫描整个老年代仍是划算的。</p>
+<h3 id="三种垃圾收集算法"><a href="#三种垃圾收集算法" class="headerlink" title="三种垃圾收集算法"></a>三种垃圾收集算法</h3><h4 id="标记-清除算法"><a href="#标记-清除算法" class="headerlink" title="标记-清除算法"></a>标记-清除算法</h4><p>扫描一遍对象之后，标记出哪些可回收哪些不可回收，接着保留不可回收的，清除可回收的，这个算法最为简单，也是后面两个算法的基础，它有几个显而易见的缺点：</p>
+<ul>
+<li>执行效率不稳定，假如Java堆中对象数量很大，并且大部分都是需要回收的，那么要进行大量的标记清除工作，执行效率就会降低</li>
+<li>直接原地清除的话会产生大量不连续的内存碎片，如果内存碎片太多，程序运行也需要分配较大对象的话，可能会出现无法找到足够的连续内存而提前出发GC</li>
+</ul>
+<h4 id="标记-复制算法"><a href="#标记-复制算法" class="headerlink" title="标记-复制算法"></a>标记-复制算法</h4><p>为了解决标记-清除算法面对大量可回收对象时执行效率低的问题，有人提出了<strong>半区复制</strong>算法，将可用内存划为大小相等的两块，当一块内存用完时，将存活的对象复制到另一块空间上，并将自身已经使用的内存空间一次性清理掉。如果内存中大量的对象都是存活的，那么这个算法将产生大量的复制开销，但如果大多数内存都是可回收的，那么算法每次复制的就是少量的存活对象，并且这种算法也不会出现空间碎片的情况。但这个算法还有点不足，内存缩小为原先的二分之一，空间浪费太大。</p>
+<p>因为这种算法适用大多数内存可回收的情况，所以很多商用JVM用这个算法来回收新生代，根据新生代朝生夕灭的特点，有人对这个算法做了改进，弥补了空间浪费这个缺点，被称为<strong>Appel式回收</strong>。</p>
+<p>Appel式回收的具体做法是将新生代划为一块较大的Eden区，两块较小的survivor区，内存大小比例是8:1:1，每次分配内存<strong>只在Eden区和一块survivor区上进行</strong>，发生垃圾收集时，将Eden区和survivor区上的存活对象复制到另一块survivor区上，然后对Eden区和已用的survivor区清理内存，这样的话，每次新生代的空间利用率可以达到90%，假如存活对象太多，一块survivor区不足以承载怎么办呢？Appel式回收提供了一个<strong>逃生门</strong>的设计，如果survivor区空间不够，就会依赖别的内存区域（多数是老年代）进行内存担保，借一块内存。</p>
+<h4 id="标记-整理算法"><a href="#标记-整理算法" class="headerlink" title="标记-整理算法"></a>标记-整理算法</h4><p>这种算法是针对老年代的特点提出的，其标记过程仍与“标记-清除”算法一样，但后续步骤不是对对象进行清理，而是将所有存活对象都向内存空间一端移动，然后直接清除掉边界外的内存。因为老年代中存活的对象很多，所以移动对象并更新对象引用是一个极为负重的操作，并且对象的移动操作必须要<strong>全程暂停用户应用线程</strong>才能进行，这无疑是增加延迟的。但如果和标记-清除算法一样不考虑移动整理存活对象的话，空间碎片化问题只能依赖更为复杂的内存分配器/内存访问器解决（比如像计算机硬盘存储大文件那样），两者均有利弊，那到底是整理内存还是不整理呢？从整个程序的吞吐量来看，因为内存分配和访问相比于垃圾收集频率要大得多，所以权衡利弊，应该用垃圾收集时的短暂延迟换取内存分配访问所耗费的时间复杂度。</p>
+<p>另外，也可以两者兼顾，让虚拟机平时多数时间采用标记-清除算法，当内存碎片化程度高于一定阈值时，再采用标记-整理算法收集一次，换取规整的内存空间。</p>
+
+      
+    </div>
+    
+    
+    
+
+    
+
+    
+
+    
+
+    <footer class="post-footer">
+      
+        <div class="post-tags">
+          
+            <a href="/tags/Java/" rel="tag"># Java</a>
+          
+            <a href="/tags/JVM/" rel="tag"># JVM</a>
+          
+        </div>
+      
+
+      
+      
+      
+
+      
+        <div class="post-nav">
+          <div class="post-nav-next post-nav-item">
+            
+              <a href="/2020/05/29/Java%E8%99%9A%E6%8B%9F%E6%9C%BA%E5%AD%A6%E4%B9%A0%E7%AC%94%E8%AE%B0%E4%B8%80%EF%BC%9A%E5%AF%B9%E8%B1%A1%E4%B8%8EJVM/" rel="next" title="Java虚拟机学习笔记一：对象与JVM">
+                <i class="fa fa-chevron-left"></i> Java虚拟机学习笔记一：对象与JVM
+              </a>
+            
+          </div>
+
+          <span class="post-nav-divider"></span>
+
+          <div class="post-nav-prev post-nav-item">
+            
+              <a href="/2020/12/27/%E5%91%BD%E4%BB%A4%E5%BC%8F-%E5%A3%B0%E6%98%8E%E5%BC%8F-%E5%93%8D%E5%BA%94%E5%BC%8F-%E5%87%BD%E6%95%B0%E5%BC%8F/" rel="prev" title="命令式 声明式 响应式 函数式">
+                命令式 声明式 响应式 函数式 <i class="fa fa-chevron-right"></i>
+              </a>
+            
+          </div>
+        </div>
+      
+
+      
+      
+    </footer>
+  </div>
+  
+  
+  
+  </article>
+
+
+
+    <div class="post-spread">
+      
+    </div>
+  </div>
+
+
+          </div>
+          
+
+
+          
+
+  
+
+
+
+        </div>
+        
+          
+  
+  <div class="sidebar-toggle">
+    <div class="sidebar-toggle-line-wrap">
+      <span class="sidebar-toggle-line sidebar-toggle-line-first"></span>
+      <span class="sidebar-toggle-line sidebar-toggle-line-middle"></span>
+      <span class="sidebar-toggle-line sidebar-toggle-line-last"></span>
+    </div>
+  </div>
+
+  <aside id="sidebar" class="sidebar">
+    
+    <div class="sidebar-inner">
+
+      
+
+      
+        <ul class="sidebar-nav motion-element">
+          <li class="sidebar-nav-toc sidebar-nav-active" data-target="post-toc-wrap">
+            Table of Contents
+          </li>
+          <li class="sidebar-nav-overview" data-target="site-overview-wrap">
+            Overview
+          </li>
+        </ul>
+      
+
+      <section class="site-overview-wrap sidebar-panel">
+        <div class="site-overview">
+          <div class="site-author motion-element" itemprop="author" itemscope itemtype="http://schema.org/Person">
+            
+              <p class="site-author-name" itemprop="name">Yao Xianjie</p>
+              <p class="site-description motion-element" itemprop="description"></p>
+          </div>
+
+          <nav class="site-state motion-element">
+
+            
+              <div class="site-state-item site-state-posts">
+              
+                <a href="/archives">
+              
+                  <span class="site-state-item-count">16</span>
+                  <span class="site-state-item-name">posts</span>
+                </a>
+              </div>
+            
+
+            
+              
+              
+              <div class="site-state-item site-state-categories">
+                <a href="/categories/index.html">
+                  <span class="site-state-item-count">5</span>
+                  <span class="site-state-item-name">categories</span>
+                </a>
+              </div>
+            
+
+            
+              
+              
+              <div class="site-state-item site-state-tags">
+                <a href="/tags/index.html">
+                  <span class="site-state-item-count">19</span>
+                  <span class="site-state-item-name">tags</span>
+                </a>
+              </div>
+            
+
+          </nav>
+
+          
+
+          
+
+          
+          
+
+          
+          
+
+          
+
+        </div>
+      </section>
+
+      
+      <!--noindex-->
+        <section class="post-toc-wrap motion-element sidebar-panel sidebar-panel-active">
+          <div class="post-toc">
+
+            
+              
+            
+
+            
+              <div class="post-toc-content"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#常见对象存活判定算法"><span class="nav-number">1.</span> <span class="nav-text">常见对象存活判定算法</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#引用计数法"><span class="nav-number">1.1.</span> <span class="nav-text">引用计数法</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#可达性分析法"><span class="nav-number">1.2.</span> <span class="nav-text">可达性分析法</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#对象的引用分类（强度依次递减）"><span class="nav-number">2.</span> <span class="nav-text">对象的引用分类（强度依次递减）</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#finalize-方法"><span class="nav-number">3.</span> <span class="nav-text">finalize()方法</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#方法区的回收"><span class="nav-number">4.</span> <span class="nav-text">方法区的回收</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#垃圾收集算法"><span class="nav-number">5.</span> <span class="nav-text">垃圾收集算法</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#分代收集理论"><span class="nav-number">5.1.</span> <span class="nav-text">分代收集理论</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#三种垃圾收集算法"><span class="nav-number">5.2.</span> <span class="nav-text">三种垃圾收集算法</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#标记-清除算法"><span class="nav-number">5.2.1.</span> <span class="nav-text">标记-清除算法</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#标记-复制算法"><span class="nav-number">5.2.2.</span> <span class="nav-text">标记-复制算法</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#标记-整理算法"><span class="nav-number">5.2.3.</span> <span class="nav-text">标记-整理算法</span></a></li></ol></li></ol></li></ol></div>
+            
+
+          </div>
+        </section>
+      <!--/noindex-->
+      
+
+      
+
+    </div>
+  </aside>
+
+
+        
+      </div>
+    </main>
+
+    <footer id="footer" class="footer">
+      <div class="footer-inner">
+        <div class="copyright">&copy; <span itemprop="copyrightYear">2021</span>
+  <span class="with-love">
+    <i class="fa fa-user"></i>
+  </span>
+  <span class="author" itemprop="copyrightHolder">Yao Xianjie</span>
+
+  
+    <span class="post-meta-divider">|</span>
+    <span class="post-meta-item-icon">
+      <i class="fa fa-area-chart"></i>
+    </span>
+    
+      <span class="post-meta-item-text">Site words total count&#58;</span>
+    
+    <span title="Site words total count">26.8k</span>
+  
+</div>
+
+
+  <div class="powered-by">Powered by <a class="theme-link" target="_blank" href="https://hexo.io">Hexo</a></div>
+
+
+
+  <span class="post-meta-divider">|</span>
+
+
+
+  <div class="theme-info">Theme &mdash; <a class="theme-link" target="_blank" href="https://github.com/iissnan/hexo-theme-next">NexT.Pisces</a> v5.1.4</div>
+
+
+
+
+        
+
+
+
+
+
+
+
+        
+      </div>
+    </footer>
+
+    
+      <div class="back-to-top">
+        <i class="fa fa-arrow-up"></i>
+        
+      </div>
+    
+
+    
+
+  </div>
+
+  
+
+<script type="text/javascript">
+  if (Object.prototype.toString.call(window.Promise) !== '[object Function]') {
+    window.Promise = null;
+  }
+</script>
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+  
+    <script type="text/javascript" src="/lib/jquery/index.js?v=2.1.3"></script>
+  
+
+  
+  
+    <script type="text/javascript" src="/lib/fastclick/lib/fastclick.min.js?v=1.0.6"></script>
+  
+
+  
+  
+    <script type="text/javascript" src="/lib/jquery_lazyload/jquery.lazyload.js?v=1.9.7"></script>
+  
+
+  
+  
+    <script type="text/javascript" src="/lib/velocity/velocity.min.js?v=1.2.1"></script>
+  
+
+  
+  
+    <script type="text/javascript" src="/lib/velocity/velocity.ui.min.js?v=1.2.1"></script>
+  
+
+  
+  
+    <script type="text/javascript" src="/lib/fancybox/source/jquery.fancybox.pack.js?v=2.1.5"></script>
+  
+
+
+  
+
+
+  <script type="text/javascript" src="/js/src/utils.js?v=5.1.4"></script>
+
+  <script type="text/javascript" src="/js/src/motion.js?v=5.1.4"></script>
+
+
+
+  
+  
+
+
+  <script type="text/javascript" src="/js/src/affix.js?v=5.1.4"></script>
+
+  <script type="text/javascript" src="/js/src/schemes/pisces.js?v=5.1.4"></script>
+
+
+
+  
+  <script type="text/javascript" src="/js/src/scrollspy.js?v=5.1.4"></script>
+<script type="text/javascript" src="/js/src/post-details.js?v=5.1.4"></script>
+
+
+
+  
+
+
+  <script type="text/javascript" src="/js/src/bootstrap.js?v=5.1.4"></script>
+
+
+
+  
+
+
+  
+
+
+
+
+	
+
+
+
+
+
+  
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+  <script type="text/javascript">
+    // Popup Window;
+    var isfetched = false;
+    var isXml = true;
+    // Search DB path;
+    var search_path = "search.xml";
+    if (search_path.length === 0) {
+      search_path = "search.xml";
+    } else if (/json$/i.test(search_path)) {
+      isXml = false;
+    }
+    var path = "/" + search_path;
+    // monitor main search box;
+
+    var onPopupClose = function (e) {
+      $('.popup').hide();
+      $('#local-search-input').val('');
+      $('.search-result-list').remove();
+      $('#no-result').remove();
+      $(".local-search-pop-overlay").remove();
+      $('body').css('overflow', '');
+    }
+
+    function proceedsearch() {
+      $("body")
+        .append('<div class="search-popup-overlay local-search-pop-overlay"></div>')
+        .css('overflow', 'hidden');
+      $('.search-popup-overlay').click(onPopupClose);
+      $('.popup').toggle();
+      var $localSearchInput = $('#local-search-input');
+      $localSearchInput.attr("autocapitalize", "none");
+      $localSearchInput.attr("autocorrect", "off");
+      $localSearchInput.focus();
+    }
+
+    // search function;
+    var searchFunc = function(path, search_id, content_id) {
+      'use strict';
+
+      // start loading animation
+      $("body")
+        .append('<div class="search-popup-overlay local-search-pop-overlay">' +
+          '<div id="search-loading-icon">' +
+          '<i class="fa fa-spinner fa-pulse fa-5x fa-fw"></i>' +
+          '</div>' +
+          '</div>')
+        .css('overflow', 'hidden');
+      $("#search-loading-icon").css('margin', '20% auto 0 auto').css('text-align', 'center');
+
+      $.ajax({
+        url: path,
+        dataType: isXml ? "xml" : "json",
+        async: true,
+        success: function(res) {
+          // get the contents from search data
+          isfetched = true;
+          $('.popup').detach().appendTo('.header-inner');
+          var datas = isXml ? $("entry", res).map(function() {
+            return {
+              title: $("title", this).text(),
+              content: $("content",this).text(),
+              url: $("url" , this).text()
+            };
+          }).get() : res;
+          var input = document.getElementById(search_id);
+          var resultContent = document.getElementById(content_id);
+          var inputEventFunction = function() {
+            var searchText = input.value.trim().toLowerCase();
+            var keywords = searchText.split(/[\s\-]+/);
+            if (keywords.length > 1) {
+              keywords.push(searchText);
+            }
+            var resultItems = [];
+            if (searchText.length > 0) {
+              // perform local searching
+              datas.forEach(function(data) {
+                var isMatch = false;
+                var hitCount = 0;
+                var searchTextCount = 0;
+                var title = data.title.trim();
+                var titleInLowerCase = title.toLowerCase();
+                var content = data.content.trim().replace(/<[^>]+>/g,"");
+                var contentInLowerCase = content.toLowerCase();
+                var articleUrl = decodeURIComponent(data.url);
+                var indexOfTitle = [];
+                var indexOfContent = [];
+                // only match articles with not empty titles
+                if(title != '') {
+                  keywords.forEach(function(keyword) {
+                    function getIndexByWord(word, text, caseSensitive) {
+                      var wordLen = word.length;
+                      if (wordLen === 0) {
+                        return [];
+                      }
+                      var startPosition = 0, position = [], index = [];
+                      if (!caseSensitive) {
+                        text = text.toLowerCase();
+                        word = word.toLowerCase();
+                      }
+                      while ((position = text.indexOf(word, startPosition)) > -1) {
+                        index.push({position: position, word: word});
+                        startPosition = position + wordLen;
+                      }
+                      return index;
+                    }
+
+                    indexOfTitle = indexOfTitle.concat(getIndexByWord(keyword, titleInLowerCase, false));
+                    indexOfContent = indexOfContent.concat(getIndexByWord(keyword, contentInLowerCase, false));
+                  });
+                  if (indexOfTitle.length > 0 || indexOfContent.length > 0) {
+                    isMatch = true;
+                    hitCount = indexOfTitle.length + indexOfContent.length;
+                  }
+                }
+
+                // show search results
+
+                if (isMatch) {
+                  // sort index by position of keyword
+
+                  [indexOfTitle, indexOfContent].forEach(function (index) {
+                    index.sort(function (itemLeft, itemRight) {
+                      if (itemRight.position !== itemLeft.position) {
+                        return itemRight.position - itemLeft.position;
+                      } else {
+                        return itemLeft.word.length - itemRight.word.length;
+                      }
+                    });
+                  });
+
+                  // merge hits into slices
+
+                  function mergeIntoSlice(text, start, end, index) {
+                    var item = index[index.length - 1];
+                    var position = item.position;
+                    var word = item.word;
+                    var hits = [];
+                    var searchTextCountInSlice = 0;
+                    while (position + word.length <= end && index.length != 0) {
+                      if (word === searchText) {
+                        searchTextCountInSlice++;
+                      }
+                      hits.push({position: position, length: word.length});
+                      var wordEnd = position + word.length;
+
+                      // move to next position of hit
+
+                      index.pop();
+                      while (index.length != 0) {
+                        item = index[index.length - 1];
+                        position = item.position;
+                        word = item.word;
+                        if (wordEnd > position) {
+                          index.pop();
+                        } else {
+                          break;
+                        }
+                      }
+                    }
+                    searchTextCount += searchTextCountInSlice;
+                    return {
+                      hits: hits,
+                      start: start,
+                      end: end,
+                      searchTextCount: searchTextCountInSlice
+                    };
+                  }
+
+                  var slicesOfTitle = [];
+                  if (indexOfTitle.length != 0) {
+                    slicesOfTitle.push(mergeIntoSlice(title, 0, title.length, indexOfTitle));
+                  }
+
+                  var slicesOfContent = [];
+                  while (indexOfContent.length != 0) {
+                    var item = indexOfContent[indexOfContent.length - 1];
+                    var position = item.position;
+                    var word = item.word;
+                    // cut out 100 characters
+                    var start = position - 20;
+                    var end = position + 80;
+                    if(start < 0){
+                      start = 0;
+                    }
+                    if (end < position + word.length) {
+                      end = position + word.length;
+                    }
+                    if(end > content.length){
+                      end = content.length;
+                    }
+                    slicesOfContent.push(mergeIntoSlice(content, start, end, indexOfContent));
+                  }
+
+                  // sort slices in content by search text's count and hits' count
+
+                  slicesOfContent.sort(function (sliceLeft, sliceRight) {
+                    if (sliceLeft.searchTextCount !== sliceRight.searchTextCount) {
+                      return sliceRight.searchTextCount - sliceLeft.searchTextCount;
+                    } else if (sliceLeft.hits.length !== sliceRight.hits.length) {
+                      return sliceRight.hits.length - sliceLeft.hits.length;
+                    } else {
+                      return sliceLeft.start - sliceRight.start;
+                    }
+                  });
+
+                  // select top N slices in content
+
+                  var upperBound = parseInt('1');
+                  if (upperBound >= 0) {
+                    slicesOfContent = slicesOfContent.slice(0, upperBound);
+                  }
+
+                  // highlight title and content
+
+                  function highlightKeyword(text, slice) {
+                    var result = '';
+                    var prevEnd = slice.start;
+                    slice.hits.forEach(function (hit) {
+                      result += text.substring(prevEnd, hit.position);
+                      var end = hit.position + hit.length;
+                      result += '<b class="search-keyword">' + text.substring(hit.position, end) + '</b>';
+                      prevEnd = end;
+                    });
+                    result += text.substring(prevEnd, slice.end);
+                    return result;
+                  }
+
+                  var resultItem = '';
+
+                  if (slicesOfTitle.length != 0) {
+                    resultItem += "<li><a href='" + articleUrl + "' class='search-result-title'>" + highlightKeyword(title, slicesOfTitle[0]) + "</a>";
+                  } else {
+                    resultItem += "<li><a href='" + articleUrl + "' class='search-result-title'>" + title + "</a>";
+                  }
+
+                  slicesOfContent.forEach(function (slice) {
+                    resultItem += "<a href='" + articleUrl + "'>" +
+                      "<p class=\"search-result\">" + highlightKeyword(content, slice) +
+                      "...</p>" + "</a>";
+                  });
+
+                  resultItem += "</li>";
+                  resultItems.push({
+                    item: resultItem,
+                    searchTextCount: searchTextCount,
+                    hitCount: hitCount,
+                    id: resultItems.length
+                  });
+                }
+              })
+            };
+            if (keywords.length === 1 && keywords[0] === "") {
+              resultContent.innerHTML = '<div id="no-result"><i class="fa fa-search fa-5x" /></div>'
+            } else if (resultItems.length === 0) {
+              resultContent.innerHTML = '<div id="no-result"><i class="fa fa-frown-o fa-5x" /></div>'
+            } else {
+              resultItems.sort(function (resultLeft, resultRight) {
+                if (resultLeft.searchTextCount !== resultRight.searchTextCount) {
+                  return resultRight.searchTextCount - resultLeft.searchTextCount;
+                } else if (resultLeft.hitCount !== resultRight.hitCount) {
+                  return resultRight.hitCount - resultLeft.hitCount;
+                } else {
+                  return resultRight.id - resultLeft.id;
+                }
+              });
+              var searchResultList = '<ul class=\"search-result-list\">';
+              resultItems.forEach(function (result) {
+                searchResultList += result.item;
+              })
+              searchResultList += "</ul>";
+              resultContent.innerHTML = searchResultList;
+            }
+          }
+
+          if ('auto' === 'auto') {
+            input.addEventListener('input', inputEventFunction);
+          } else {
+            $('.search-icon').click(inputEventFunction);
+            input.addEventListener('keypress', function (event) {
+              if (event.keyCode === 13) {
+                inputEventFunction();
+              }
+            });
+          }
+
+          // remove loading animation
+          $(".local-search-pop-overlay").remove();
+          $('body').css('overflow', '');
+
+          proceedsearch();
+        }
+      });
+    }
+
+    // handle and trigger popup window;
+    $('.popup-trigger').click(function(e) {
+      e.stopPropagation();
+      if (isfetched === false) {
+        searchFunc(path, 'local-search-input', 'local-search-result');
+      } else {
+        proceedsearch();
+      };
+    });
+
+    $('.popup-btn-close').click(onPopupClose);
+    $('.popup').click(function(e){
+      e.stopPropagation();
+    });
+    $(document).on('keyup', function (event) {
+      var shouldDismissSearchPopup = event.which === 27 &&
+        $('.search-popup').is(':visible');
+      if (shouldDismissSearchPopup) {
+        onPopupClose();
+      }
+    });
+  </script>
+
+
+
+
+
+  
+
+  
+
+  
+
+  
+  
+
+  
+  
+    <script type="text/x-mathjax-config">
+      MathJax.Hub.Config({
+        tex2jax: {
+          inlineMath: [ ['$','$'], ["\\(","\\)"]  ],
+          processEscapes: true,
+          skipTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+        }
+      });
+    </script>
+
+    <script type="text/x-mathjax-config">
+      MathJax.Hub.Queue(function() {
+        var all = MathJax.Hub.getAllJax(), i;
+        for (i=0; i < all.length; i += 1) {
+          all[i].SourceElement().parentNode.className += ' has-jax';
+        }
+      });
+    </script>
+    <script type="text/javascript" src="//cdn.bootcss.com/mathjax/2.7.1/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
+  
+
+
+  
+
+  
+
+</body>
+</html>
