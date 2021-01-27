@@ -84,18 +84,18 @@
 <meta name="description" content="前两天，看见公司有一些同学利用一些技术手段动态更新飞书签名，有人实时更新微博热搜，有人春节放假倒计时，还是挺有趣的，正巧北京这几天疫情比较紧张，我就也写了一个服务在飞书签名上定时更新北京的风险地区。 梳理了一下步骤流程，首先获取到飞书的cookie，然后在字节的“轻服务”平台上线一个服务，用来利用cookie更新飞书签名，接着在开发机部署一个定时任务，定时在丁香园爬取北京的风险地区，然后将数据po">
 <meta property="og:type" content="article">
 <meta property="og:title" content="搞点新花样——飞书签名自动更新">
-<meta property="og:url" content="http://yoursite.com/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/index.html">
+<meta property="og:url" content="https://bodhisatan.github.io/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/index.html">
 <meta property="og:site_name" content="Bodhisatan&#39;s blog">
 <meta property="og:description" content="前两天，看见公司有一些同学利用一些技术手段动态更新飞书签名，有人实时更新微博热搜，有人春节放假倒计时，还是挺有趣的，正巧北京这几天疫情比较紧张，我就也写了一个服务在飞书签名上定时更新北京的风险地区。 梳理了一下步骤流程，首先获取到飞书的cookie，然后在字节的“轻服务”平台上线一个服务，用来利用cookie更新飞书签名，接着在开发机部署一个定时任务，定时在丁香园爬取北京的风险地区，然后将数据po">
 <meta property="og:locale" content="en_US">
-<meta property="og:image" content="http://yoursite.com/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/cookie.png">
-<meta property="og:image" content="http://yoursite.com/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/jieguo.png">
+<meta property="og:image" content="https://bodhisatan.github.io/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/cookie.png">
+<meta property="og:image" content="https://bodhisatan.github.io/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/jieguo.png">
 <meta property="article:published_time" content="2021-01-21T04:05:48.000Z">
 <meta property="article:modified_time" content="2021-01-22T08:19:30.347Z">
 <meta property="article:author" content="Yao Xianjie">
 <meta property="article:tag" content="杂项">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:image" content="http://yoursite.com/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/cookie.png">
+<meta name="twitter:image" content="https://bodhisatan.github.io/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/cookie.png">
 
 
 
@@ -125,7 +125,7 @@
 
 
 
-  <link rel="canonical" href="http://yoursite.com/2021/01/21/搞点新花样——飞书签名自动更新/"/>
+  <link rel="canonical" href="https://bodhisatan.github.io/2021/01/21/搞点新花样——飞书签名自动更新/"/>
 
 
 
@@ -292,7 +292,7 @@
   
   
   <div class="post-block">
-    <link itemprop="mainEntityOfPage" href="http://yoursite.com/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/">
+    <link itemprop="mainEntityOfPage" href="https://bodhisatan.github.io/2021/01/21/%E6%90%9E%E7%82%B9%E6%96%B0%E8%8A%B1%E6%A0%B7%E2%80%94%E2%80%94%E9%A3%9E%E4%B9%A6%E7%AD%BE%E5%90%8D%E8%87%AA%E5%8A%A8%E6%9B%B4%E6%96%B0/">
 
     <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
       <meta itemprop="name" content="Yao Xianjie">
