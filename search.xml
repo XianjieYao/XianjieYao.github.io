@@ -1051,7 +1051,14 @@ MAX_I=2^{bit-width}-1=255</script></li>
 <li>iOS 7.x 和iOS 8.X：可执行文件单架构_TEXT段大小不得超过60M</li>
 <li>iOS 9.x 以及更高版本：可执行文件所有架构_TEXT段总大小不得超过500M</li>
 </ul>
-<p>（上边的限制均以 1000 为进位单位而不是 1024）</p>
+<p>（上边的限制均以 <strong>1000</strong> 为进位单位而不是 1024：<strong>1MB=1000KB</strong>）</p>
+<h3 id="iOS系统的两个口径：Download-Size和Install-Size"><a href="#iOS系统的两个口径：Download-Size和Install-Size" class="headerlink" title="iOS系统的两个口径：Download Size和Install Size"></a>iOS系统的两个口径：Download Size和Install Size</h3><p>在前文说<strong>下载大小</strong>这一概念的时候，关于iOS的部分说的不是很精确，在这里补充说明一下。</p>
+<p>在 itunes connect 后台，开发者可以看到当前版本针对不同机型的大小。<br><img src="/2021/02/02/%E4%B8%A4%E7%A7%8D%E4%B8%8D%E5%90%8C%E7%9A%84%E5%8C%85%E4%BD%93%E7%A7%AF%E6%8A%8A%E6%8E%A7%E6%80%9D%E8%B7%AF/iTunes.png" alt></p>
+<p>这里的大小分为两个口径： <strong>Download Size</strong> 和 <strong>Install Size</strong>。</p>
+<p>根据网页上的说明： Install Size 是这个 app 安装后，会占用的磁盘大小； Download Size 是 app 经过压缩后的大小。</p>
+<p>根据经验，用户在 app store 上看到的大小，就是 itunes connect 后台中显示的 <strong>Install Size</strong>。（注意：<strong>不是</strong>Download Size！！！）</p>
+<p>而令开发者在意的，“超过 200 MB 的 app 必须连接至无线局域网才能下载”的规则中的 200 MB，指的其实是 <strong>Download Size</strong>。</p>
+<p>所以与上文结合可以知道，.ipa文件解压之后的.app文件，大小和install size更为接近。</p>
 ]]></content>
       <categories>
         <category>客户端质量</category>
