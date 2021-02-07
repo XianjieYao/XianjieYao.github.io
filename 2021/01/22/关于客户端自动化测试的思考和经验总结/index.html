@@ -89,7 +89,7 @@
 <meta property="og:description" content="2020年的1月15号，我入职了百度，成了一名测试开发实习生，到现在为止，也已经有整整一年的时间了。 这一年发生了很多事，因为疫情原因在出租屋里吃了一个月的泡面，因为不返校而得以一直实习，先是在百度，然后是在字节，还认识了一个我坚定地觉得可以相伴一生的人。一年前的我只有后端开发的经验，对测试领域一无所知，误打误撞进了客户端测试的领域，并且一直做了下来，经历了很多，也算是有所思考和沉淀吧。下面就谈一">
 <meta property="og:locale" content="en_US">
 <meta property="article:published_time" content="2021-01-22T09:01:44.000Z">
-<meta property="article:modified_time" content="2021-01-30T05:53:40.732Z">
+<meta property="article:modified_time" content="2021-02-07T15:19:26.347Z">
 <meta property="article:author" content="Yao Xianjie">
 <meta property="article:tag" content="自动化测试">
 <meta property="article:tag" content="UI自动化">
@@ -442,7 +442,7 @@
 <li>可分布式执行、并发执行：可以将case打到设备集群上并发执行，减少测试时长，也能增大机型/系统覆盖率</li>
 </ul>
 <h2 id="UI自动化2-0"><a href="#UI自动化2-0" class="headerlink" title="UI自动化2.0"></a>UI自动化2.0</h2><p>从百度一路走来，在UI自动化方面踩了很多坑，刚写case的时候，没有注意case的解耦、复用，导致维护起来非常消耗人力，于是后来进字节之后，将case提取出公共场景进行复用，比如评论和买车都需要登录，就把登录场景单独拎出来给评论case、买车case复用，这样如果以后登录case页面做出改动，也只要修改一个case就行。字节自研了一个自动化框架，叫“Shoots”，采用<code>PageObject</code>设计模式，框架设计和稳定性都很不错。但是编写这个case的上手门槛非常高，要求QA很熟悉python和客户端环境，虽然它提供了一个本地IDE，但是case还是需要自己新建类自己写，非常不适合代码能力没那么高的业务同学用，于是我和师兄开发了一个测试平台，设计了一套类似uia2的脚本语法，将生成的脚本用jinjia模版翻译成Shoots的代码，这样就曲线救国实现了case的自动生成。云真机的前端渲染是开发app的SDK提供截图+ui树（Native控件使用原生代码获取ui树，webview界面通过向webview注入js获取ui树），发给服务端生成预览。</p>
-<p>UI自动化的2.0，意味着要放宽思路，很多技术都可以应用于UI自动化中。例如通过hook，对一些没有id的控件自动生成id（<a href="https://github.com/yulingtianxia/TBUIAutoTest" target="_blank" rel="noopener">https://github.com/yulingtianxia/TBUIAutoTest</a> ），降低元素定位难度。例如将一些cv算法用于UI自动化测试过程中判断界面是否存在花屏/白屏，图像对比、模版匹配算法对比两幅图像是否一致，可以用于性能测试时获取开始帧、结束帧，也可以判断ui自动化测试的结果是否符合预期。还可以结合<code>fuzz test</code>，利用UI自动化访问特定接口进行接口健壮性测试。</p>
+<p>UI自动化的2.0，意味着要放宽思路，很多技术都可以应用于UI自动化中。例如通过hook，对一些没有id的控件自动生成id（<a href="https://github.com/yulingtianxia/TBUIAutoTest" target="_blank" rel="noopener">https://github.com/yulingtianxia/TBUIAutoTest</a> ），降低元素定位难度。例如将一些cv算法用于UI自动化测试过程中判断界面是否存在花屏/白屏，图像对比、模版匹配算法对比两幅图像是否一致，可以用于性能测试时获取开始帧、结束帧，也可以判断ui自动化测试的结果是否符合预期。还可以结合<code>fuzz test</code>，利用UI自动化访问特定接口进行接口健壮性测试。还可以从很多角度优化自动化脚本编写的体验和效率，比如<code>元素id变了之后自动修复脚本</code>、<code>提供历史截图和控件树实现不需要连手机就能编写case</code>。</p>
 <h2 id="客户端自动化的未来：AI-Test"><a href="#客户端自动化的未来：AI-Test" class="headerlink" title="客户端自动化的未来：AI Test"></a>客户端自动化的未来：AI Test</h2><p>现在很多公司都在AI Test方面进行探索，客户端的话主要是自动测试生成（<code>Automated Testing Generation</code>）技术，编写case不再需要工程师，而是可以自动生成和维护case，目前在稳定性测试方面落地得比较好（<a href="https://github.com/bytedance/Fastbot_Android" target="_blank" rel="noopener">https://github.com/bytedance/Fastbot_Android</a> ）。case生成主要有两种思路，一种是提取出界面的控件，对Activity/ViewController进行bfs/dfs/A*搜索，还有一种是利用线上用户的行为提取行为链进行case生成。我在我们组负责过一个AI Test工具的落地，crash召回率有40%左右，收益还是挺不错的。</p>
 
       
@@ -661,7 +661,7 @@
     
       <span class="post-meta-item-text">Site words total count&#58;</span>
     
-    <span title="Site words total count">29.6k</span>
+    <span title="Site words total count">29.7k</span>
   
 </div>
 
