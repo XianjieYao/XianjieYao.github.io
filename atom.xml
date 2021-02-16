@@ -6,7 +6,7 @@
   <link href="https://bodhisatan.github.io/atom.xml" rel="self"/>
   
   <link href="https://bodhisatan.github.io/"/>
-  <updated>2021-02-04T07:42:53.647Z</updated>
+  <updated>2021-02-16T07:41:06.027Z</updated>
   <id>https://bodhisatan.github.io/</id>
   
   <author>
@@ -15,6 +15,32 @@
   </author>
   
   <generator uri="https://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>图像拼接系统设计与实现（2）：Web 拼接系统设计与实现</title>
+    <link href="https://bodhisatan.github.io/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/"/>
+    <id>https://bodhisatan.github.io/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/</id>
+    <published>2021-02-16T02:22:16.000Z</published>
+    <updated>2021-02-16T07:41:06.027Z</updated>
+    
+    <content type="html"><![CDATA[<h2 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h2><p>之前的博客中，已经介绍了图像拼接主要可以分为4个阶段：<code>特征提取</code>、<code>特征匹配</code>、<code>图像配准</code>、<code>图像融合</code>，其中特征提取阶段有<code>SURF</code>、<code>SIFT</code>、<code>ORB</code>、<code>Harris</code>等算法。于是我写了一个Web系统，用于使用不同的特征提取算法进行图像拼接，并且比较之间的效率和质量。</p><p>项目为前后端分离项目，前端代码仓库地址：<a href="https://github.com/bodhisatan/stitch-frontend" target="_blank" rel="noopener">https://github.com/bodhisatan/stitch-frontend</a> ；后端代码仓库地址：<a href="https://github.com/bodhisatan/stitch-backend" target="_blank" rel="noopener">https://github.com/bodhisatan/stitch-backend</a></p><h2 id="系统设计"><a href="#系统设计" class="headerlink" title="系统设计"></a>系统设计</h2><h3 id="算法选取"><a href="#算法选取" class="headerlink" title="算法选取"></a>算法选取</h3><p>在图像拼接领域中，主要流行的有三种特征提取算法：SIFT、SURF、ORB，这三种都在OpenCV里有实现（SURF因为专利原因已经从OpenCV里下掉），SURF是SIFT的加强版，运算效率比SIFT高一个数量级，ORB基于FAST，运算效率比SIFT高两个数量级，但是鲁棒性不及SIFT和SURF。因此在算法的选取上，选择了OpenCV已经实现的SIFT和ORB，在运算效率和鲁棒性方面都有明显的比较。除此之外，我自己也实现了一个Harris方案，Harris是一种角点匹配方法，对尺度很敏感，不具有尺度不变性，需要先将图片转为灰度图再进行运算。</p><h3 id="比较参数选取"><a href="#比较参数选取" class="headerlink" title="比较参数选取"></a>比较参数选取</h3><p>对于算法的比较，主要从三方面考虑：</p><ul><li>待拼接图像的相似度（前置条件角度）</li><li>输出图像的质量（输出质量角度）</li><li>运行时间（运行效率角度）<h4 id="输入图像相似度"><a href="#输入图像相似度" class="headerlink" title="输入图像相似度"></a>输入图像相似度</h4>相似度采用两方面指标：</li><li>三通道直方图相似度: 比较常见的衡量相似度的指标，先得到图像像素值的直方图，再计算直方图的相似度，这种计算方案有个缺陷，它仅反映图像像素值的数量，不能反映图像纹理结构，很明显该方法存在很多误判，比如纹理结构相同，但明暗不同的图像，应该相似度很高，但实际结果是相似度很低，而纹理结构不同，但明暗相近的图像，相似度却很高。</li><li>SSIM: 为了弥补直方图相似度的缺陷，我又采取了SSIM指标。SSIM是结构化相似度，是一种全参考的图像质量评价指标，它分别从亮度、对比度、结构三方面度量图像相似性，能够弥补直方图相似度误判的缺陷。（在之前的博文中也有详细介绍）</li></ul><h4 id="输出图像质量"><a href="#输出图像质量" class="headerlink" title="输出图像质量"></a>输出图像质量</h4><p>拼接的输出图像的品质，一般从有没有裂缝、有没有鬼影、有没有正确拼接等角度，但没有一个具体客观的指标。我看了相关的论文之后，发现有一篇论文通过PSNR指标作为输出图像质量的参考。</p><p>PSNR(Peak Signal to Noise Ratio): 峰值信噪比，主要是为了衡量经过处理后的影像品质，PSNR指标越高，代表输出图像的失真越少，质量越高</p><script type="math/tex; mode=display">PSNR=10*log_{10}(\frac{MAX_I^2}{MSE})</script><script type="math/tex; mode=display">MSE = \frac{1}{mn}\sum_{i=0}^{m-1}\sum_{j=0}^{n-1}[I(i, j)-K(i,j)]^2</script><p>其中，MAXI是表示图像点颜色的最大数值，如果每个采样点用 8 位表示，那么就是 255。</p><h4 id="运行时间"><a href="#运行时间" class="headerlink" title="运行时间"></a>运行时间</h4><p>运行时间记录两个时间：</p><ul><li>特征提取阶段运算耗时（主要比较的算法耗时）</li><li>图像拼接运算总耗时</li></ul><h2 id="系统实现"><a href="#系统实现" class="headerlink" title="系统实现"></a>系统实现</h2><h3 id="技术选型"><a href="#技术选型" class="headerlink" title="技术选型"></a>技术选型</h3><p>前端采用<code>Vue.js</code>和<code>webpack</code>技术实现前后端分离，组件采用<code>elementUI</code>和<code>ECharts</code>，与后端通信采用<code>axios</code>，后端框架从易用性角度考虑采用<code>Flask</code>，数据库从方便扩展的角度考虑采用<code>MongoDB</code></p><h3 id="实现结果"><a href="#实现结果" class="headerlink" title="实现结果"></a>实现结果</h3><p><img src="/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/1.png" alt></p><p><img src="/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/2.png" alt></p><p><img src="/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/3.png" alt></p>]]></content>
+    
+    
+      
+      
+    <summary type="html">&lt;h2 id=&quot;前言&quot;&gt;&lt;a href=&quot;#前言&quot; class=&quot;headerlink&quot; title=&quot;前言&quot;&gt;&lt;/a&gt;前言&lt;/h2&gt;&lt;p&gt;之前的博客中，已经介绍了图像拼接主要可以分为4个阶段：&lt;code&gt;特征提取&lt;/code&gt;、&lt;code&gt;特征匹配&lt;/code&gt;、&lt;code&gt;图</summary>
+      
+    
+    
+    
+    <category term="图像算法" scheme="https://bodhisatan.github.io/categories/%E5%9B%BE%E5%83%8F%E7%AE%97%E6%B3%95/"/>
+    
+    
+    <category term="图像算法" scheme="https://bodhisatan.github.io/tags/%E5%9B%BE%E5%83%8F%E7%AE%97%E6%B3%95/"/>
+    
+    <category term="图像拼接" scheme="https://bodhisatan.github.io/tags/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5/"/>
+    
+  </entry>
   
   <entry>
     <title>两种不同的包体积把控思路</title>
