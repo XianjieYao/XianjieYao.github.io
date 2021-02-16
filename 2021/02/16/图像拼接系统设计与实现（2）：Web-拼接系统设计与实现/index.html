@@ -92,7 +92,7 @@
 <meta property="og:image" content="https://bodhisatan.github.io/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/2.png">
 <meta property="og:image" content="https://bodhisatan.github.io/2021/02/16/%E5%9B%BE%E5%83%8F%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%EF%BC%882%EF%BC%89%EF%BC%9AWeb-%E6%8B%BC%E6%8E%A5%E7%B3%BB%E7%BB%9F%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0/3.png">
 <meta property="article:published_time" content="2021-02-16T02:22:16.000Z">
-<meta property="article:modified_time" content="2021-02-16T07:41:06.027Z">
+<meta property="article:modified_time" content="2021-02-16T07:58:20.206Z">
 <meta property="article:author" content="Yao Xianjie">
 <meta property="article:tag" content="图像算法">
 <meta property="article:tag" content="图像拼接">
@@ -377,7 +377,7 @@
                   <span class="post-meta-item-text">Words count in article&#58;</span>
                 
                 <span title="Words count in article">
-                  951 字
+                  984 字
                 </span>
               
 
@@ -421,7 +421,7 @@
 <ul>
 <li>待拼接图像的相似度（前置条件角度）</li>
 <li>输出图像的质量（输出质量角度）</li>
-<li>运行时间（运行效率角度）<h4 id="输入图像相似度"><a href="#输入图像相似度" class="headerlink" title="输入图像相似度"></a>输入图像相似度</h4>相似度采用两方面指标：</li>
+<li>运行时间（运行效率角度）<h4 id="输入图像相似度"><a href="#输入图像相似度" class="headerlink" title="输入图像相似度"></a>输入图像相似度</h4>有些特征提取、匹配算法要求待匹配图像相似度较高，于是我记录了相似度参数。相似度采用两方面指标：</li>
 <li>三通道直方图相似度: 比较常见的衡量相似度的指标，先得到图像像素值的直方图，再计算直方图的相似度，这种计算方案有个缺陷，它仅反映图像像素值的数量，不能反映图像纹理结构，很明显该方法存在很多误判，比如纹理结构相同，但明暗不同的图像，应该相似度很高，但实际结果是相似度很低，而纹理结构不同，但明暗相近的图像，相似度却很高。</li>
 <li>SSIM: 为了弥补直方图相似度的缺陷，我又采取了SSIM指标。SSIM是结构化相似度，是一种全参考的图像质量评价指标，它分别从亮度、对比度、结构三方面度量图像相似性，能够弥补直方图相似度误判的缺陷。（在之前的博文中也有详细介绍）</li>
 </ul>
@@ -652,7 +652,7 @@ MSE = \frac{1}{mn}\sum_{i=0}^{m-1}\sum_{j=0}^{n-1}[I(i, j)-K(i,j)]^2</script><p>
     
       <span class="post-meta-item-text">Site words total count&#58;</span>
     
-    <span title="Site words total count">30.6k</span>
+    <span title="Site words total count">30.7k</span>
   
 </div>
 
